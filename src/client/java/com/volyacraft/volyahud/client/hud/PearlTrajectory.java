@@ -10,7 +10,7 @@ import com.mojang.blaze3d.vertex.VertexFormat;
 import com.volyacraft.volyahud.client.config.HudConfig;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderContext;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.RenderPipelines;
+import net.minecraft.client.renderer.CoreShaders;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
@@ -197,7 +197,7 @@ public class PearlTrajectory {
 					.setNormal((float) normal.x, (float) normal.y, (float) normal.z);
 		}
 
-		RenderSystem.setShader(RenderPipelines.LINES);
+		RenderSystem.setShader(CoreShaders.RENDERTYPE_LINES);
 		RenderSystem.enableBlend();
 		RenderSystem.defaultBlendFunc();
 		RenderSystem.enableDepthTest();
