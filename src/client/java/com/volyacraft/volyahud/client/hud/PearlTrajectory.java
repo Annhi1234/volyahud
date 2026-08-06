@@ -99,6 +99,7 @@ public class PearlTrajectory {
 		HudConfig cfg = HudConfig.INSTANCE;
 		Vec3 camPos = context.camera().getPosition();
 		PoseStack matrices = context.matrixStack();
+		float partialTick = context.tickCounter().getGameTimeDeltaPartialTick(true);
 
 		matrices.pushPose();
 		matrices.translate(-camPos.x, -camPos.y, -camPos.z);
@@ -108,7 +109,7 @@ public class PearlTrajectory {
 		if (cfg.pearlTrajectory) {
 			Kind held = heldKind(mc);
 			if (held != null) {
-				List<Vec3> path = simulateThrow(mc, held);
+				List<Vec3> path = simulateThrow(mc, held, partialTick);
 				drawThickLine(pose, path, held.pr, held.pg, held.pb, 0.9f, PREVIEW_WIDTH);
 			}
 		}
@@ -144,27 +145,49 @@ public class PearlTrajectory {
 	 * нижче ока гравця, напрямок з урахуванням зміщення тангажу (наприклад,
 	 * -20° для зілля/пляшки досвіду — саме тому вони летять по дузі вгору),
 	 * далі рух, опір повітря x0.99 та гравітація застосовуються ПІСЛЯ руху.
+	 *
+	 * ВАЖЛИВО (фікс траєкторії): раніше напрямок рахувався з НЕінтерпольованих
+	 * player.getXRot()/getYRot(), які на швидких поворотах миші на 1 тік
+	 * "відстають" від того, куди насправді дивиться камера — лінія трохи
+	 * не збігалась із прицілом. Тепер беремо ту саму інтерпольовану позицію
+	 * ока та кут огляду (partial tick), що використовує рендер камери,
+	 * тому прев'ю завжди точно збігається з напрямком погляду.
 	 */
-	private static List<Vec3> simulateThrow(Minecraft mc, Kind kind) {
+	private static List<Vec3> simulateThrow(Minecraft mc, Kind kind, float partialTick) {
 		List<Vec3> points = new ArrayList<>();
-		Vec3 pos = new Vec3(mc.player.getX(), mc.player.getEyeY() - 0.1, mc.player.getZ());
-		Vec3 vel = shootDirection(mc.player, kind.pitchOffset).scale(kind.velocity);
+		Player player = mc.player;
+		Vec3 eye = player.getEyePosition(partialTick);
+		Vec3 pos = new Vec3(eye.x, eye.y - 0.1, eye.z);
+		Vec3 vel = shootDirection(player, partialTick, kind.pitchOffset).scale(kind.velocity);
 
 		points.add(pos);
 		for (int i = 0; i < 140; i++) {
 			pos = pos.add(vel);
 			vel = vel.scale(0.99).subtract(0, kind.gravity, 0);
 			points.add(pos);
-			if (!mc.level.getBlockState(BlockPos.containing(pos)).isAir()) {
+			if (hitsSolid(mc, pos)) {
 				break;
 			}
 		}
 		return points;
 	}
 
-	private static Vec3 shootDirection(Player player, float pitchOffset) {
-		float pitch = player.getXRot();
-		float yaw = player.getYRot();
+	/**
+	 * Раніше зупинка лінії перевіряла лише "чи блок = повітря" (isAir()).
+	 * Це змушувало прев'ю обриватись навіть у траві, квітах, килимках, знаку —
+	 * тобто в блоках, крізь які снаряд насправді пролітає без перешкод.
+	 * Перевірка через форму колізії — набагато точніша.
+	 */
+	private static boolean hitsSolid(Minecraft mc, Vec3 pos) {
+		BlockPos blockPos = BlockPos.containing(pos);
+		var state = mc.level.getBlockState(blockPos);
+		if (state.isAir()) return false;
+		return !state.getCollisionShape(mc.level, blockPos).isEmpty();
+	}
+
+	private static Vec3 shootDirection(Player player, float partialTick, float pitchOffset) {
+		float pitch = player.getViewXRot(partialTick);
+		float yaw = player.getViewYRot(partialTick);
 		double pitchRad = Math.toRadians(pitch);
 		double yawRad = Math.toRadians(yaw);
 		double x = -Math.sin(yawRad) * Math.cos(pitchRad);
@@ -177,7 +200,8 @@ public class PearlTrajectory {
 	 * Малює товсту, добре видну лінію напряму через Tesselator, а не через
 	 * усереднений RenderType.lines() — той форсує ширину 1px незалежно від
 	 * RenderSystem.lineWidth(...), тому лінія практично не була видна.
-	 * Тут ширина керується напряму перед відправкою буфера на відмальовку.
+	 * Тут ширина керується напряму перед відправкою буфера на відмальовку
+	 * (той самий прийом, яким ваніла малює товсті контури хітбоксів).
 	 */
 	private static void drawThickLine(Matrix4f pose, List<Vec3> points, float r, float g, float b, float a, float width) {
 		if (points.size() < 2) return;

@@ -1,4 +1,7 @@
 {
   "key.volyahud.open_config": "Open VolyaHUD config",
+  "key.volyahud.toggle_chunk_grid": "Toggle chunk border grid",
+  "key.volyahud.toggle_territory": "Toggle territory border",
+  "key.volyahud.claim_chunk": "Claim/unclaim current chunk as territory",
   "category.volyahud.general": "VolyaHUD"
 }

@@ -15,14 +15,18 @@ import org.joml.Vector4f;
 public class ArmorHud {
 
 	// Порядок промальовування власної броні у сітці 2x2:
-	// [ШОЛОМ]     [ШТАНИ]
-	// [НАГРУДНИК] [ПОНОЖІ]
+	// [ШОЛОМ]     [НАГРУДНИК]
+	// [ШТАНИ]     [ЧОБОТИ]
+	// (БАГ-ФІКС: раніше було HEAD,LEGS / CHEST,FEET — верхній ряд показував
+	// шолом поруч зі штаньми, а нижній нагрудник поруч з чоботами, що не
+	// відповідає природному порядку зверху вниз по тілу.)
 	private static final EquipmentSlot[] GRID = {
-			EquipmentSlot.HEAD, EquipmentSlot.LEGS,
-			EquipmentSlot.CHEST, EquipmentSlot.FEET
+			EquipmentSlot.HEAD, EquipmentSlot.CHEST,
+			EquipmentSlot.LEGS, EquipmentSlot.FEET
 	};
 
-	// Порядок для рядка над іншими гравцями (голова -> ноги, зліва направо)
+	// Порядок для рядка (і своєї лінійної панелі, і мітки над іншими гравцями):
+	// голова -> груди -> ноги -> ступні, зліва направо.
 	private static final EquipmentSlot[] ROW = {
 			EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET
 	};
@@ -31,31 +35,63 @@ public class ArmorHud {
 	private static final int GAP = 2;
 
 	// ---------------------------------------------------------------
-	// Власна броня — панель 2x2 знизу-зліва (або знизу-справа), над хотбаром.
+	// Власна броня — панель у нижньому куті, над хотбаром (або притиснута
+	// до самого низу, якщо увімкнено armorFlushBottom).
 	// ---------------------------------------------------------------
 	public static void renderOwn(GuiGraphics graphics, Minecraft mc) {
 		Player player = mc.player;
 		if (player == null) return;
 		HudConfig cfg = HudConfig.INSTANCE;
 
-		int panelW = SLOT * 2 + GAP;
-		int panelH = SLOT * 2 + GAP;
+		boolean line = cfg.armorLayout == HudConfig.ArmorLayout.LINE;
+		int panelW = line ? (SLOT * 4 + GAP * 3) : (SLOT * 2 + GAP);
+		int panelH = line ? SLOT : (SLOT * 2 + GAP);
 
 		int screenW = graphics.guiWidth();
 		int screenH = graphics.guiHeight();
 
-		// 22px запасу знизу — щоб не залазити на ванільний хотбар,
-		// ще 6px — щоб не впритул до нього.
-		int x = cfg.armorOnRight ? (screenW - 8 - panelW) : 8;
-		int y = screenH - 22 - 6 - panelH;
+		boolean onRight = cfg.armorCorner == HudConfig.ScreenCorner.BOTTOM_RIGHT
+				|| cfg.armorCorner == HudConfig.ScreenCorner.TOP_RIGHT;
+		boolean onTop = cfg.armorCorner == HudConfig.ScreenCorner.TOP_LEFT
+				|| cfg.armorCorner == HudConfig.ScreenCorner.TOP_RIGHT;
+
+		int x = onRight ? (screenW - 8 - panelW) : 8;
+		int y;
+		if (onTop) {
+			y = 8;
+		} else if (cfg.armorFlushBottom) {
+			// впритул до самого низу екрана (може лягати поверх країв хотбару)
+			y = screenH - 4 - panelH;
+		} else {
+			// 22px запасу знизу — щоб не залазити на ванільний хотбар,
+			// ще 8px — щоб не впритул до нього.
+			y = screenH - 22 - 8 - panelH;
+		}
+
+		x += cfg.armorOffsetX;
+		y += cfg.armorOffsetY;
+
+		// не даємо панелі повністю зникнути за межами екрана від ручного зміщення
+		x = clamp(x, -panelW + 8, screenW - 8);
+		y = clamp(y, 0, screenH - 8);
 
 		graphics.fill(x - 3, y - 3, x + panelW + 3, y + panelH + 3, 0x60000000);
 		graphics.fill(x - 3, y - 3, x + panelW + 3, y - 2, 0x40FFFFFF); // тонка світла лінія зверху панелі
 
-		drawSlot(graphics, mc, player.getItemBySlot(GRID[0]), x, y);
-		drawSlot(graphics, mc, player.getItemBySlot(GRID[1]), x + SLOT + GAP, y);
-		drawSlot(graphics, mc, player.getItemBySlot(GRID[2]), x, y + SLOT + GAP);
-		drawSlot(graphics, mc, player.getItemBySlot(GRID[3]), x + SLOT + GAP, y + SLOT + GAP);
+		if (line) {
+			for (int i = 0; i < ROW.length; i++) {
+				drawSlot(graphics, mc, player.getItemBySlot(ROW[i]), x + i * (SLOT + GAP), y);
+			}
+		} else {
+			drawSlot(graphics, mc, player.getItemBySlot(GRID[0]), x, y);
+			drawSlot(graphics, mc, player.getItemBySlot(GRID[1]), x + SLOT + GAP, y);
+			drawSlot(graphics, mc, player.getItemBySlot(GRID[2]), x, y + SLOT + GAP);
+			drawSlot(graphics, mc, player.getItemBySlot(GRID[3]), x + SLOT + GAP, y + SLOT + GAP);
+		}
+	}
+
+	private static int clamp(int v, int min, int max) {
+		return Math.max(min, Math.min(max, v));
 	}
 
 	private static void drawSlot(GuiGraphics graphics, Minecraft mc, ItemStack stack, int x, int y) {
@@ -67,15 +103,37 @@ public class ArmorHud {
 		graphics.renderItem(stack, ix, iy);
 		graphics.renderItemDecorations(mc.font, stack, ix, iy);
 
-		if (stack.isDamageableItem()) {
-			int max = stack.getMaxDamage();
-			int cur = max - stack.getDamageValue();
-			int percent = Math.round(100f * cur / max);
-			int color = percent > 50 ? 0x55FF55 : percent > 20 ? 0xFFFF55 : 0xFF5555;
-			String text = percent + "%";
-			int tx = x + SLOT - mc.font.width(text);
-			graphics.drawString(mc.font, text, tx, y + SLOT + 1, color, true);
-		}
+		drawDurabilityOverlay(graphics, mc.font, stack, x, y, SLOT, SLOT);
+	}
+
+	/**
+	 * Малює % міцності предмета ПОВЕРХ самого слота (у нижньому правому куті
+	 * іконки), а не під ним. Раніше текст малювався нижче слота і в сітці
+	 * 2x2 його миттєво перекривав наступний ряд броні знизу (GAP між рядами
+	 * лише 2px) — саме тому верхній відсоток був майже не видно. Малювання
+	 * всередині меж слота повністю прибирає цей конфлікт незалежно від
+	 * розкладки (сітка/лінія) і звільняє місце під панеллю.
+	 */
+	private static void drawDurabilityOverlay(GuiGraphics graphics, Font font, ItemStack stack, int x, int y, int w, int h) {
+		if (!stack.isDamageableItem()) return;
+		int max = stack.getMaxDamage();
+		int cur = max - stack.getDamageValue();
+		int percent = Math.round(100f * cur / max);
+		int color = percent > 50 ? 0x55FF55 : percent > 20 ? 0xFFFF55 : 0xFF5555;
+		String text = percent + "%";
+
+		// зменшуємо шрифт, тільки якщо текст не влазить у ширину слота
+		int textW = font.width(text);
+		float fontScale = textW > w - 2 ? (w - 2f) / textW : 1f;
+
+		graphics.pose().pushPose();
+		int tx = x + w - Math.round(textW * fontScale) - 1;
+		int ty = y + h - 9;
+		graphics.pose().translate(tx, ty, 0);
+		graphics.pose().scale(fontScale, fontScale, 1f);
+		graphics.fill(-1, -1, Math.round(textW * fontScale) + 1, 9, 0xA0000000);
+		graphics.drawString(font, text, 0, 0, color, true);
+		graphics.pose().popPose();
 	}
 
 	// ---------------------------------------------------------------
@@ -94,6 +152,7 @@ public class ArmorHud {
 
 		for (Player other : mc.level.players()) {
 			if (other == mc.player) continue;
+			if (other.isSpectator()) continue;
 			double dist = other.distanceTo(mc.player);
 			if (dist > cfg.otherPlayersRenderDistance) continue;
 			if (other.isInvisibleTo(mc.player)) continue;
@@ -124,7 +183,11 @@ public class ArmorHud {
 	/**
 	 * Малює накопичені за цей кадр мітки гравців (заповнюється в renderOthers,
 	 * викликається останнім проходом HudRenderCallback). Порядок знизу вгору
-	 * над головою: [нік (малює ваніла)] -> [HP] -> [броня].
+	 * над головою: [нік (малює ваніла)] -> [HP] -> [броня] -> [зброя в руках].
+	 *
+	 * Раніше % міцності броні малювався ПІД рядом іконок і на 1px залазив на
+	 * рядок HP над ним — тепер, як і у власній броні, % малюється прямо
+	 * поверх іконки, тому рядки більше не накладаються одне на одне.
 	 */
 	public static void drawQueuedOverlays(GuiGraphics graphics, Minecraft mc) {
 		HudConfig cfg = HudConfig.INSTANCE;
@@ -133,48 +196,53 @@ public class ArmorHud {
 		int rowWidth = ROW.length * (16 + 2) - 2;
 
 		for (OverlayQueue.Entry entry : OverlayQueue.drain()) {
+			if (entry.player().isRemoved() || !entry.player().isAlive()) continue;
+
 			// entry.y() відповідає приблизно висоті, де ваніла малює нік гравця.
 			int nickY = entry.y();
 			int hpY = nickY - 12;
-			int armorY = hpY - 18;
+			int armorY = hpY - 20;
 
 			if (cfg.healthTags) {
-				float hp = entry.player().getHealth();
-				float maxHp = entry.player().getMaxHealth();
+				float hp = Math.max(0f, entry.player().getHealth());
+				float maxHp = Math.max(1f, entry.player().getMaxHealth());
 				int hpColor = hp > maxHp * 0.5f ? 0x55FF55 : hp > maxHp * 0.2f ? 0xFFFF55 : 0xFF5555;
 				String hpText = Math.round(hp) + "/" + Math.round(maxHp) + " \u2764";
-				graphics.drawString(font, hpText, entry.x() - font.width(hpText) / 2, hpY, hpColor, true);
+				int hpW = font.width(hpText);
+				graphics.fill(entry.x() - hpW / 2 - 2, hpY - 1, entry.x() + hpW / 2 + 2, hpY + 9, 0x60000000);
+				graphics.drawString(font, hpText, entry.x() - hpW / 2, hpY, hpColor, true);
 			}
 
+			// БАГ-ФІКС: раніше блок inventoryPeek був ВКЛАДЕНИЙ усередину
+			// "if (cfg.otherPlayersArmorHud)", тож "Показ екіпіровки цілі"
+			// у меню налаштувань насправді не працював сам по собі — предмети
+			// в руках цілі показувались, лише якщо ЩЕ й броня була увімкнена.
+			// Тепер це два повністю незалежні тумблери, як і показано в GUI.
 			if (cfg.otherPlayersArmorHud) {
 				int ix = entry.x() - rowWidth / 2;
+				graphics.fill(ix - 2, armorY - 2, ix + rowWidth + 2, armorY + 18, 0x40000000);
 				for (EquipmentSlot slot : ROW) {
 					ItemStack stack = entry.player().getItemBySlot(slot);
 					if (!stack.isEmpty()) {
-						graphics.fill(ix - 1, armorY - 1, ix + 17, armorY + 17, 0x50000000);
 						graphics.renderItem(stack, ix, armorY);
-						if (stack.isDamageableItem()) {
-							int max = stack.getMaxDamage();
-							int cur = max - stack.getDamageValue();
-							int percent = Math.round(100f * cur / max);
-							int color = percent > 50 ? 0x55FF55 : percent > 20 ? 0xFFFF55 : 0xFF5555;
-							graphics.drawString(font, percent + "%", ix, armorY + 17, color, true);
-						}
+						drawDurabilityOverlay(graphics, font, stack, ix, armorY, 16, 16);
 					}
 					ix += 18;
 				}
+			}
 
-				if (cfg.inventoryPeek) {
-					ItemStack mainHand = entry.player().getMainHandItem();
-					ItemStack offHand = entry.player().getOffhandItem();
-					int peekY = armorY - 20;
-					int peekX = entry.x() - 9;
-					if (!mainHand.isEmpty()) {
-						graphics.renderItem(mainHand, peekX - 10, peekY);
-					}
-					if (!offHand.isEmpty()) {
-						graphics.renderItem(offHand, peekX + 10, peekY);
-					}
+			if (cfg.inventoryPeek) {
+				ItemStack mainHand = entry.player().getMainHandItem();
+				ItemStack offHand = entry.player().getOffhandItem();
+				int peekY = armorY - 22;
+				int peekX = entry.x() - 9;
+				if (!mainHand.isEmpty()) {
+					graphics.fill(peekX - 20, peekY - 1, peekX - 2, peekY + 17, 0x40000000);
+					graphics.renderItem(mainHand, peekX - 18, peekY);
+				}
+				if (!offHand.isEmpty()) {
+					graphics.fill(peekX + 2, peekY - 1, peekX + 20, peekY + 17, 0x40000000);
+					graphics.renderItem(offHand, peekX + 4, peekY);
 				}
 			}
 		}
