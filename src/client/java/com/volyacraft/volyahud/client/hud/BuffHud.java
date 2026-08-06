@@ -2,7 +2,6 @@ package com.volyacraft.volyahud.client.hud;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
-import net.minecraft.client.renderer.texture.MobEffectTextureManager;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.phys.EntityHitResult;
@@ -14,30 +13,36 @@ public class BuffHud {
 	 * Ванільні власні ефекти малюються у правому верхньому куті.
 	 * Тут малюємо ефекти цілі (на кого дивишся) у лівому верхньому куті —
 	 * тобто з протилежного боку екрана.
+	 *
+	 * Малюємо кольоровим маркером + текстом (без іконок з текстур-атласу
+	 * ефектів) — це найнадійніший варіант, бо API рендеру іконок ефектів
+	 * (спрайти/текстур-менеджер) змінювався між збірками 1.21.x і легко
+	 * "ламається" при найменшій розбіжності версії.
 	 */
 	public static void render(GuiGraphics graphics, Minecraft mc) {
 		if (mc.player == null || !(mc.hitResult instanceof EntityHitResult entityHit)) return;
-		if (!(entityHit.getEntity() instanceof LivingEntity target)) return;
 		if (mc.hitResult.getType() != HitResult.Type.ENTITY) return;
+		if (!(entityHit.getEntity() instanceof LivingEntity target)) return;
 
 		var effects = target.getActiveEffects();
 		if (effects.isEmpty()) return;
 
 		int x = 8;
 		int y = 8;
-		MobEffectTextureManager textureManager = mc.getMobEffectTextures();
 
 		graphics.drawString(mc.font, target.getName(), x, y, 0xFFFFFF, true);
 		y += 12;
 
 		for (MobEffectInstance effect : effects) {
-			var sprite = textureManager.get(effect.getEffect());
-			graphics.blitSprite(net.minecraft.client.renderer.RenderPipelines.GUI_TEXTURED,
-					sprite.location(), x, y, 18, 18);
+			int color = effect.getEffect().value().getColor();
+			graphics.fill(x, y + 2, x + 8, y + 10, 0xFF000000 | color);
+
+			String name = effect.getEffect().value().getDisplayName().getString();
 			String amplifier = effect.getAmplifier() > 0 ? " " + toRoman(effect.getAmplifier() + 1) : "";
 			String duration = formatDuration(effect.getDuration());
-			graphics.drawString(mc.font, duration + amplifier, x + 22, y + 5, 0xFFFFFF, true);
-			y += 20;
+
+			graphics.drawString(mc.font, name + amplifier + " (" + duration + ")", x + 12, y, 0xFFFFFF, true);
+			y += 12;
 		}
 	}
 

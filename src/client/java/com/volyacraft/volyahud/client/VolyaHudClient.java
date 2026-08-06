@@ -59,6 +59,9 @@ public class VolyaHudClient implements ClientModInitializer {
 			if (cfg.targetBuffsHud) {
 				BuffHud.render(graphics, mc);
 			}
+			if (cfg.totemAlert) {
+				TotemAlert.render(graphics, mc);
+			}
 		});
 
 		// 3D-рендер у світі: броня/HP над гравцями, траєкторія перли, слід перли.

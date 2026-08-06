@@ -43,7 +43,7 @@ public class ArmorHud {
 
 		if (stack.isDamageableItem()) {
 			int max = stack.getMaxDamage();
-			int cur = max - stack.getDamage();
+			int cur = max - stack.getDamageValue();
 			int percent = Math.round(100f * cur / max);
 			int color = percent > 50 ? 0x55FF55 : percent > 20 ? 0xFFFF55 : 0xFF5555;
 			graphics.drawString(mc.font, percent + "%", x + 19, y + 4, color, true);
@@ -116,7 +116,7 @@ public class ArmorHud {
 						graphics.renderItem(stack, ix, y);
 						if (stack.isDamageableItem()) {
 							int max = stack.getMaxDamage();
-							int cur = max - stack.getDamage();
+							int cur = max - stack.getDamageValue();
 							int percent = Math.round(100f * cur / max);
 							int color = percent > 50 ? 0x55FF55 : percent > 20 ? 0xFFFF55 : 0xFF5555;
 							graphics.drawString(font, percent + "%", ix, y + 17, color, true);

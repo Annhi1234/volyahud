@@ -1,33 +1,50 @@
 package com.volyacraft.volyahud.client.hud;
 
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.components.toasts.SystemToast;
-import net.minecraft.network.chat.Component;
+import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.world.entity.Entity;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Заповнюється з ClientPacketListenerMixin, коли приходить
  * ClientboundEntityEventPacket зі статусом 35 (спрацював тотем).
- * Ванільна гра НЕ приховує це від клієнта — це видима частина протоколу
- * (партиклі/звук тотема все одно летять усім навколо), тому це не read-хак,
- * просто зручне візуальне сповіщення замість того, щоб вилавливати це очима.
+ * Ванільна гра НЕ приховує це від клієнта — партиклі/звук тотема все одно
+ * летять усім навколо, це вже видима частина протоколу, тому це не read-хак,
+ * просто зручне текстове сповіщення замість того, щоб вилавливати це очима.
+ *
+ * Малюємо власним текстом (замість ванільної системи toast'ів) — так надійніше,
+ * бо API toast-менеджера змінюється між збірками і легше поламати компіляцію.
  */
 public class TotemAlert {
+
+	private record Alert(String text, long expiresAtMs) {
+	}
+
+	private static final List<Alert> ACTIVE = new ArrayList<>();
 
 	public static void onTotemUsed(Entity entity) {
 		Minecraft mc = Minecraft.getInstance();
 		if (mc.player == null || entity == mc.player) return;
 		if (mc.player.distanceTo(entity) > 32) return;
 
-		mc.getToasts().addToast(new SystemToast(
-				SystemToast.SystemToastId.NARRATOR_TOGGLE,
-				Component.literal("Тотем!"),
-				Component.literal(entity.getName().getString() + " використав(ла) тотем")
-		));
+		ACTIVE.add(new Alert(entity.getName().getString() + " використав(ла) тотем!", System.currentTimeMillis() + 3000));
 	}
 
 	public static void tick(Minecraft mc) {
-		// Наразі сповіщення живе саме як toast (система сама його прибирає).
-		// Місце залишене для майбутнього розширення (наприклад мітка над гравцем).
+		ACTIVE.removeIf(a -> System.currentTimeMillis() > a.expiresAtMs());
+	}
+
+	public static void render(GuiGraphics graphics, Minecraft mc) {
+		if (ACTIVE.isEmpty()) return;
+		int y = 40;
+		int centerX = graphics.guiWidth() / 2;
+		for (Alert alert : ACTIVE) {
+			int width = mc.font.width(alert.text());
+			graphics.fill(centerX - width / 2 - 4, y - 2, centerX + width / 2 + 4, y + 10, 0x99000000);
+			graphics.drawCenteredString(mc.font, alert.text(), centerX, y, 0xFFD700);
+			y += 14;
+		}
 	}
 }
