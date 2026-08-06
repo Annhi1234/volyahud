@@ -5,6 +5,7 @@ import com.volyacraft.volyahud.client.config.HudConfig;
 import com.volyacraft.volyahud.client.gui.ConfigScreen;
 import com.volyacraft.volyahud.client.hud.ArmorHud;
 import com.volyacraft.volyahud.client.hud.BuffHud;
+import com.volyacraft.volyahud.client.hud.FpsHud;
 import com.volyacraft.volyahud.client.hud.OverlayQueue;
 import com.volyacraft.volyahud.client.hud.PearlTrajectory;
 import com.volyacraft.volyahud.client.hud.PvpRadar;
@@ -61,6 +62,9 @@ public class VolyaHudClient implements ClientModInitializer {
 			}
 			if (cfg.totemAlert) {
 				TotemAlert.render(graphics, mc);
+			}
+			if (cfg.showFps || cfg.showCoords || cfg.showChunkCoords) {
+				FpsHud.render(graphics, mc);
 			}
 		});
 

@@ -32,10 +32,16 @@ public class HudConfig {
 	public boolean targetBuffsHud = true;
 	public boolean inventoryPeek = true;
 	public boolean totemAlert = true;
+	public boolean showFps = false;
+	public boolean showCoords = false;
+	public boolean showChunkCoords = false;
 
 	// --- налаштовувані параметри ---
 	public double otherPlayersRenderDistance = 40.0;
 	public double pvpRadarActivationDistance = 24.0;
+
+	/** false = своя броня знизу-зліва (за замовчуванням), true = знизу-справа. */
+	public boolean armorOnRight = false;
 
 	public static HudConfig load() {
 		if (Files.exists(FILE)) {
