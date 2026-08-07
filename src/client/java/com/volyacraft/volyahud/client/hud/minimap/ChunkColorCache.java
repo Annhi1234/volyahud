@@ -76,7 +76,7 @@ public final class ChunkColorCache {
 		int worldX = cp.getMinBlockX() + localX;
 		int worldZ = cp.getMinBlockZ() + localZ;
 		int topY = chunk.getHeight(Heightmap.Types.WORLD_SURFACE, worldX, worldZ) - 1;
-		if (topY < chunk.getMinBuildHeight()) {
+		if (topY < chunk.getMinY()) {
 			return 0xFF141414; // немає рельєфу (наприклад, дно порожнього чанка) — темно-сірий
 		}
 		BlockPos pos = new BlockPos(worldX, topY, worldZ);
@@ -85,7 +85,7 @@ public final class ChunkColorCache {
 		if (mapColor == MapColor.NONE) {
 			return 0xFF1A1A1A;
 		}
-		int rgb = mapColor.calculateRGBColor(MapColor.Brightness.NORMAL);
+		int rgb = mapColor.calculateARGBColor(MapColor.Brightness.NORMAL);
 		return 0xFF000000 | rgb;
 	}
 
