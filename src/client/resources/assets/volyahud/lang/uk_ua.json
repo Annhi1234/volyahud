@@ -3,5 +3,6 @@
   "key.volyahud.toggle_chunk_grid": "Увімк/вимк сітку меж чанка",
   "key.volyahud.toggle_territory": "Увімк/вимк кордон території",
   "key.volyahud.claim_chunk": "Позначити/зняти поточний чанк як територію",
+  "key.volyahud.open_map": "Відкрити повну карту VolyaHUD",
   "category.volyahud.general": "VolyaHUD"
 }

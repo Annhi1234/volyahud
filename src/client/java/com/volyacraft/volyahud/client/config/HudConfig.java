@@ -10,7 +10,9 @@ import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -86,6 +88,46 @@ public class HudConfig {
 	 * через ChunkPos.asLong(x, z). Заповнюється клавішею J або з меню.
 	 */
 	public Map<String, Set<Long>> territoryChunks = new HashMap<>();
+
+	// --- мінімапа ---
+	/** Малювати невеличку мінімапу в кутку екрана. Клавіша розгортання повної карти за замовчуванням: M. */
+	public boolean minimap = true;
+	/** Розмір панелі мінімапи в пікселях (квадрат size x size). */
+	public int minimapSize = 128;
+	/** У якому куті екрана малювати мінімапу. */
+	public ScreenCorner minimapCorner = ScreenCorner.TOP_RIGHT;
+	/** Ручне зміщення мінімапи по X/Y (px), як і для панелі броні. */
+	public int minimapOffsetX = 0;
+	public int minimapOffsetY = 0;
+	/** Скільки пікселів мінімапи припадає на 1 блок світу (масштаб). 1 = дуже віддалено, 4-6 = близько. */
+	public int minimapZoom = 2;
+
+	/** Позначки (мітки) на карті, окремо для кожного виміру — ключ так само, як у territoryChunks. */
+	public Map<String, List<Waypoint>> waypoints = new HashMap<>();
+
+	public static class Waypoint {
+		public String name;
+		public int x;
+		public int y;
+		public int z;
+		/** Колір мітки у форматі 0xRRGGBB (без альфи — вона завжди повністю непрозора). */
+		public int color = 0xFFFFFF;
+
+		public Waypoint() {
+		}
+
+		public Waypoint(String name, int x, int y, int z, int color) {
+			this.name = name;
+			this.x = x;
+			this.y = y;
+			this.z = z;
+			this.color = color;
+		}
+	}
+
+	public List<Waypoint> waypointsFor(String dimensionKey) {
+		return waypoints.computeIfAbsent(dimensionKey, k -> new ArrayList<>());
+	}
 
 	public static HudConfig load() {
 		if (Files.exists(FILE)) {

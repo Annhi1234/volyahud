@@ -2,6 +2,7 @@ package com.volyacraft.volyahud.client.gui;
 
 import com.volyacraft.volyahud.client.config.HudConfig;
 import com.volyacraft.volyahud.client.config.TerritoryManager;
+import com.volyacraft.volyahud.client.hud.minimap.ChunkColorCache;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
@@ -28,6 +29,7 @@ public class ConfigScreen extends Screen {
 		PLAYERS("Гравці"),
 		THROWS("Кидки і радар"),
 		BUILD("Будівництво"),
+		MINIMAP("Мінімапа"),
 		INFO("Інфо-панель"),
 		MISC("Чат і інше");
 
@@ -149,6 +151,37 @@ public class ConfigScreen extends Screen {
 						"Прибирає ВСІ позначені чанки в поточному вимірі. Це не скасувати.",
 						this::clearTerritory);
 			}
+			case MINIMAP -> {
+				y1 = addToggle(col1X, y1, "Мінімапа",
+						"Показувати невеличку мапу рельєфу в кутку екрана. Ніяких мобів чи гравців вона не показує — лише блоки.",
+						() -> cfg.minimap, v -> cfg.minimap = v);
+				y1 = addCycle(col1X, y1, "Кут екрана",
+						"У якому куті малювати мінімапу.",
+						() -> cfg.minimapCorner.name(), this::cycleMinimapCorner, this::cornerLabel);
+				y1 = addStepper(col1X, y1, "Розмір (px)",
+						"Розмір панелі мінімапи в пікселях.",
+						() -> cfg.minimapSize, v -> cfg.minimapSize = v, 16, 64, 320);
+				y1 = addStepper(col1X, y1, "Наближення",
+						"Скільки пікселів мінімапи припадає на 1 блок світу. Більше — детальніше, але охоплює менше території.",
+						() -> cfg.minimapZoom, v -> cfg.minimapZoom = v, 1, 1, 6);
+				y1 = addStepper(col1X, y1, "Зсув по X",
+						"Ручне зміщення мінімапи вбік.",
+						() -> cfg.minimapOffsetX, v -> cfg.minimapOffsetX = v, 4, -400, 400);
+				y1 = addStepper(col1X, y1, "Зсув по Y",
+						"Ручне зміщення мінімапи вгору/вниз.",
+						() -> cfg.minimapOffsetY, v -> cfg.minimapOffsetY = v, 4, -400, 400);
+
+				y2 = addButton(col2X, y2, "Відкрити повну карту",
+						"Показує всі досліджені чанки цього світу й дозволяє ставити мітки. Клавіша за замовчуванням: M.",
+						() -> {
+							if (Minecraft.getInstance().level != null) {
+								Minecraft.getInstance().setScreen(new MapScreen(this));
+							}
+						});
+				y2 = addButton(col2X, y2, "Очистити карту (цей світ)",
+						"Прибирає ВСІ збережені чанки й мітки для поточного світу/сервера. Це не скасувати.",
+						this::clearMap);
+			}
 			case INFO -> {
 				y1 = addToggle(col1X, y1, "Лічильник FPS",
 						"Показувати поточну кількість кадрів за секунду.",
@@ -201,6 +234,18 @@ public class ConfigScreen extends Screen {
 		HudConfig.ScreenCorner[] all = HudConfig.ScreenCorner.values();
 		int next = (cfg.infoPanelCorner.ordinal() + 1) % all.length;
 		cfg.infoPanelCorner = all[next];
+	}
+
+	private void cycleMinimapCorner() {
+		HudConfig.ScreenCorner[] all = HudConfig.ScreenCorner.values();
+		int next = (cfg.minimapCorner.ordinal() + 1) % all.length;
+		cfg.minimapCorner = all[next];
+	}
+
+	private void clearMap() {
+		ChunkColorCache.clearCurrentWorld();
+		cfg.waypoints.clear();
+		cfg.save();
 	}
 
 	private String armorLayoutLabel(String v) {

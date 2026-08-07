@@ -4,6 +4,7 @@ import com.mojang.blaze3d.platform.InputConstants;
 import com.volyacraft.volyahud.client.config.HudConfig;
 import com.volyacraft.volyahud.client.config.TerritoryManager;
 import com.volyacraft.volyahud.client.gui.ConfigScreen;
+import com.volyacraft.volyahud.client.gui.MapScreen;
 import com.volyacraft.volyahud.client.hud.ArmorHud;
 import com.volyacraft.volyahud.client.hud.BuffHud;
 import com.volyacraft.volyahud.client.hud.ChunkGridOverlay;
@@ -13,9 +14,13 @@ import com.volyacraft.volyahud.client.hud.PearlTrajectory;
 import com.volyacraft.volyahud.client.hud.PvpRadar;
 import com.volyacraft.volyahud.client.hud.TerritoryBorder;
 import com.volyacraft.volyahud.client.hud.TotemAlert;
+import com.volyacraft.volyahud.client.hud.minimap.ChunkColorCache;
+import com.volyacraft.volyahud.client.hud.minimap.MinimapHud;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientChunkEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
 import net.minecraft.client.KeyMapping;
@@ -35,12 +40,16 @@ public class VolyaHudClient implements ClientModInitializer {
 	private static KeyMapping toggleChunkGridKey;
 	private static KeyMapping toggleTerritoryKey;
 	private static KeyMapping claimChunkKey;
+	private static KeyMapping openMapKey;
 
 	@Override
 	public void onInitializeClient() {
 		LOGGER.info("VolyaHUD ініціалізовано");
 
-		// Ctrl+K за замовчуванням відкриває меню налаштувань HUD.
+		// БАГ-ФІКС (коментар): тут раніше було написано "Ctrl+K", хоча насправді
+		// біндиться сама клавіша K без модифікатора — виправлено лише опис,
+		// логіка й так була правильною.
+		// K за замовчуванням відкриває меню налаштувань HUD.
 		openConfigKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
 				"key.volyahud.open_config",
 				InputConstants.Type.KEYSYM,
@@ -69,6 +78,14 @@ public class VolyaHudClient implements ClientModInitializer {
 				"key.volyahud.claim_chunk",
 				InputConstants.Type.KEYSYM,
 				GLFW.GLFW_KEY_J,
+				"category.volyahud.general"
+		));
+
+		// M — розгорнути повну карту (мінімапа й так завжди на екрані, якщо увімкнена).
+		openMapKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
+				"key.volyahud.open_map",
+				InputConstants.Type.KEYSYM,
+				GLFW.GLFW_KEY_M,
 				"category.volyahud.general"
 		));
 
@@ -103,6 +120,8 @@ public class VolyaHudClient implements ClientModInitializer {
 			}
 			// Підписи "16 x 16" на стінах поточного чанка (самі лінії — у 3D, нижче).
 			ChunkGridOverlay.renderHud(graphics, mc);
+
+			MinimapHud.render(graphics, mc);
 		});
 
 		// 3D-рендер у світі: броня/HP над гравцями, траєкторія перли, слід перли,
@@ -154,10 +173,46 @@ public class VolyaHudClient implements ClientModInitializer {
 							added ? "§aЧанк додано до твоєї території" : "§cЧанк прибрано з території"), true);
 				}
 			}
+			while (openMapKey.consumeClick()) {
+				if (mc.level != null && mc.screen == null) {
+					mc.setScreen(new MapScreen(null));
+				}
+			}
 			PearlTrajectory.tick(mc);
 			if (HudConfig.INSTANCE.totemAlert) {
 				TotemAlert.tick(mc);
 			}
+			MinimapHud.tick(mc);
+
+			mapAutosaveTimer++;
+			if (mapAutosaveTimer >= MAP_AUTOSAVE_INTERVAL_TICKS) {
+				mapAutosaveTimer = 0;
+				ChunkColorCache.saveWorld();
+			}
 		});
+
+		// Знімаємо колір рельєфу одразу, щойно чанк доходить до клієнта — так мапа
+		// поповнюється швидше, ніж чекати на періодичний опитувальний тік мінімапи.
+		ClientChunkEvents.CHUNK_LOAD.register((level, chunk) -> ChunkColorCache.captureChunk(level, chunk));
+
+		// Прив'язуємо збережену карту до конкретного світу (одиночна гра чи сервер),
+		// щоб мапа з одного сервера не змішувалась із мапою іншого.
+		ClientPlayConnectionEvents.JOIN.register((handler, sender, client) ->
+				ChunkColorCache.loadWorld(currentWorldKey(client)));
+		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> ChunkColorCache.saveWorld());
+	}
+
+	private static int mapAutosaveTimer = 0;
+	private static final int MAP_AUTOSAVE_INTERVAL_TICKS = 20 * 30; // раз на ~30 секунд
+
+	/** Ідентифікатор поточного "світу" для збереження карти: адреса сервера або назва одиночної гри. */
+	private static String currentWorldKey(Minecraft mc) {
+		if (mc.getCurrentServer() != null) {
+			return "server_" + mc.getCurrentServer().ip;
+		}
+		if (mc.getSingleplayerServer() != null) {
+			return "singleplayer_" + mc.getSingleplayerServer().getWorldData().getLevelName();
+		}
+		return "unknown_world";
 	}
 }
