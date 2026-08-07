@@ -65,15 +65,35 @@ public class ChunkGridOverlay {
 		int pcz = Mth.floor(mc.player.getZ()) >> 4;
 		int minY = Mth.floor(mc.player.getY()) - VERTICAL_RANGE;
 		int maxY = Mth.floor(mc.player.getY()) + VERTICAL_RANGE;
+		// ПОКРАЩЕННЯ: рівень "підлоги" сітки — прямо під ногами гравця, щоб
+		// лінії по землі було видно навіть здалеку (а не лише вертикальні
+		// стовпчики на перетинах, як раніше — це радше виглядало як паркан
+		// зі стовпів, ніж як сітка меж чанка).
+		double floorY = Mth.floor(mc.player.getY());
+
+		double spanMin = (pcx - RADIUS_CHUNKS) * 16.0;
+		double spanMax = (pcx + RADIUS_CHUNKS + 1) * 16.0;
+		double spanMinZ = (pcz - RADIUS_CHUNKS) * 16.0;
+		double spanMaxZ = (pcz + RADIUS_CHUNKS + 1) * 16.0;
 
 		List<Vec3> segments = new ArrayList<>();
 		for (int cx = -RADIUS_CHUNKS; cx <= RADIUS_CHUNKS + 1; cx++) {
 			double x = (pcx + cx) * 16.0;
 			for (int cz = -RADIUS_CHUNKS; cz <= RADIUS_CHUNKS + 1; cz++) {
 				double z = (pcz + cz) * 16.0;
+				// вертикальний стовпчик на перетині меж (видно й зверху, і знизу)
 				segments.add(new Vec3(x, minY, z));
 				segments.add(new Vec3(x, maxY, z));
 			}
+			// повна лінія межі чанка по землі вздовж осі Z (справжня "стіна" сітки)
+			segments.add(new Vec3(x, floorY, spanMinZ));
+			segments.add(new Vec3(x, floorY, spanMaxZ));
+		}
+		for (int cz = -RADIUS_CHUNKS; cz <= RADIUS_CHUNKS + 1; cz++) {
+			double z = (pcz + cz) * 16.0;
+			// і вздовж осі X
+			segments.add(new Vec3(spanMin, floorY, z));
+			segments.add(new Vec3(spanMax, floorY, z));
 		}
 
 		drawLines(pose, segments, 0.4f, 0.85f, 1f, 0.5f);

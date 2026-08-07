@@ -101,9 +101,49 @@ public final class MinimapHud {
 		// і збігається з тим, як зазвичай орієнтована мапа-предмет у ваніли).
 		graphics.drawCenteredString(mc.font, "N", x + size / 2, y + 1, 0xFFE5E5E5);
 
-		// власна позиція гравця — завжди по центру мінімапи
-		graphics.fill(x + size / 2 - 2, y + size / 2 - 2, x + size / 2 + 2, y + size / 2 + 2, 0xFFFFFFFF);
-		graphics.fill(x + size / 2 - 1, y + size / 2 - 1, x + size / 2 + 1, y + size / 2 + 1, 0xFFFF5555);
+		// Власна позиція гравця — завжди по центру мінімапи. ПОКРАЩЕННЯ: замість
+		// статичної квадратної цятки (яка не давала жодного уявлення, куди
+		// дивиться гравець) малюємо трикутник-стрілку, повернуту за напрямком
+		// погляду — так само, як прийнято майже в усіх мінімапа-модах.
+		drawFacingArrow(graphics, x + size / 2f, y + size / 2f, mc.player.getYRot());
+	}
+
+	/**
+	 * Трикутна стрілка напрямку погляду. Малюється тим самим прийомом
+	 * (Tesselator + POSITION_COLOR), що й рельєф вище — так само дешево,
+	 * один маленький draw call.
+	 */
+	private static void drawFacingArrow(GuiGraphics graphics, float cx, float cy, float yawDeg) {
+		// Ванільний yaw: 0 = південь (+Z), 90 = захід (-X). Напрямок "вперед"
+		// у світових X/Z, а мінімапа орієнтована на північ вгору, тому формула
+		// збігається з тим, як рахується зсув рельєфу відносно гравця вище.
+		double yawRad = Math.toRadians(yawDeg);
+		double dirX = -Math.sin(yawRad);
+		double dirZ = Math.cos(yawRad);
+		double perpX = -dirZ;
+		double perpZ = dirX;
+
+		float tipX = cx + (float) (dirX * 7);
+		float tipY = cy + (float) (dirZ * 7);
+		float leftX = cx - (float) (dirX * 4) + (float) (perpX * 4.5);
+		float leftY = cy - (float) (dirZ * 4) + (float) (perpZ * 4.5);
+		float rightX = cx - (float) (dirX * 4) - (float) (perpX * 4.5);
+		float rightY = cy - (float) (dirZ * 4) - (float) (perpZ * 4.5);
+
+		Matrix4f pose = graphics.pose().last().pose();
+		Tesselator tesselator = Tesselator.getInstance();
+		BufferBuilder buffer = tesselator.begin(VertexFormat.Mode.TRIANGLES, DefaultVertexFormat.POSITION_COLOR);
+		buffer.addVertex(pose, tipX, tipY, 0).setColor(1f, 0.35f, 0.35f, 1f);
+		buffer.addVertex(pose, leftX, leftY, 0).setColor(1f, 1f, 1f, 1f);
+		buffer.addVertex(pose, rightX, rightY, 0).setColor(1f, 1f, 1f, 1f);
+
+		RenderSystem.setShader(CoreShaders.POSITION_COLOR);
+		RenderSystem.enableBlend();
+		RenderSystem.defaultBlendFunc();
+		RenderSystem.disableDepthTest();
+		BufferUploader.drawWithShader(buffer.buildOrThrow());
+		RenderSystem.enableDepthTest();
+		RenderSystem.disableBlend();
 	}
 
 	private static void drawTerrain(GuiGraphics graphics, Minecraft mc, HudConfig cfg, int x, int y, int size) {

@@ -38,6 +38,13 @@ public class PvpRadar {
 		graphics.fill(left, barY, left + barWidth, barY + barHeight, 0x40FFFFFF);
 		graphics.fill(centerX - 1, barY - 2, centerX + 1, barY + barHeight + 2, 0x80FFFFFF); // мітка "прямо перед собою"
 
+		// ПОКРАЩЕННЯ: раніше гравці позаду (|relYaw| > 90) просто ігнорувались —
+		// у PvP це найнебезпечніша сліпа зона (хтось підкрадається ззаду, а
+		// радар мовчить). Тепер вони показуються трикутним індикатором на тому
+		// краю панелі, з якого боку перебувають, замість повного ігнору.
+		boolean enemyBehindLeft = false;
+		boolean enemyBehindRight = false;
+
 		for (Player other : mc.level.players()) {
 			if (other == self) continue;
 			double dist = other.distanceTo(self);
@@ -45,13 +52,36 @@ public class PvpRadar {
 
 			double yawToOther = getYawTo(self, other);
 			double relYaw = Mth.wrapDegrees(yawToOther - self.getYRot());
-			if (Math.abs(relYaw) > 90) continue; // позаду — не показуємо
+			int color = other.getHealth() < other.getMaxHealth() * 0.3f ? 0xFFFF5555 : 0xFF55FF55;
+
+			if (Math.abs(relYaw) > 90) {
+				if (relYaw > 0) enemyBehindRight = true; else enemyBehindLeft = true;
+				continue;
+			}
 
 			int dotX = centerX + (int) (relYaw / 90.0 * (barWidth / 2));
 			dotX = Mth.clamp(dotX, left, left + barWidth);
-
-			int color = other.getHealth() < other.getMaxHealth() * 0.3f ? 0xFFFF5555 : 0xFF55FF55;
 			graphics.fill(dotX - 2, barY - 3, dotX + 2, barY + barHeight + 3, color);
+		}
+
+		if (enemyBehindLeft) {
+			drawBehindArrow(graphics, left - 6, barY + barHeight / 2, true);
+		}
+		if (enemyBehindRight) {
+			drawBehindArrow(graphics, left + barWidth + 6, barY + barHeight / 2, false);
+		}
+	}
+
+	/** Маленький трикутник-попередження "ворог ззаду з цього боку", намальований звичайними fill()-смужками (без зайвого шейдера). */
+	private static void drawBehindArrow(GuiGraphics graphics, int tipX, int centerY, boolean pointsLeft) {
+		int color = 0xFFFF5555;
+		for (int row = 0; row < 5; row++) {
+			int width = 5 - row;
+			int y1 = centerY - width / 2;
+			int y2 = centerY + width / 2 + 1;
+			int x = pointsLeft ? tipX + row : tipX - row;
+			int xw = pointsLeft ? x + 1 : x;
+			graphics.fill(Math.min(x, xw), y1, Math.max(x, xw) + 1, y2, color);
 		}
 	}
 

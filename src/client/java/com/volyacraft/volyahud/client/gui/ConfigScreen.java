@@ -57,20 +57,32 @@ public class ConfigScreen extends Screen {
 
 	@Override
 	protected void init() {
-		int totalTabsWidth = Tab.values().length * 108;
+		// БАГ-ФІКС: раніше ширина вкладок рахувалась як фіксовані 108px * 7
+		// вкладок (= 756px) незалежно від реального розміру вікна. При вищому
+		// GUI Scale (або вузькому вікні) guiScaledWidth легко буває меншим за
+		// 756 — вкладки просто вилазили за межі екрана й ставали недоступні
+		// для кліку/виглядали "криво збоку". Тепер ширина кожної вкладки
+		// підлаштовується під реальну ширину екрана.
+		int tabCount = Tab.values().length;
+		int tabGap = 2;
+		int maxTabsWidth = this.width - 16;
+		int tabWidth = Mth.clamp((maxTabsWidth - tabGap * (tabCount - 1)) / tabCount, 46, 106);
+		int totalTabsWidth = tabWidth * tabCount + tabGap * (tabCount - 1);
 		int tabX = this.width / 2 - totalTabsWidth / 2;
 		for (Tab tab : Tab.values()) {
 			boolean selected = tab == currentTab;
 			Button tabButton = Button.builder(
 					Component.literal((selected ? "\u25B8 " : "") + tab.title),
 					b -> switchTab(tab)
-			).bounds(tabX, 26, 104, TAB_HEIGHT).build();
+			).bounds(tabX, 26, tabWidth, TAB_HEIGHT).build();
 			tabButton.active = !selected;
 			this.addRenderableWidget(tabButton);
-			tabX += 108;
+			tabX += tabWidth + tabGap;
 		}
 
-		int col1X = this.width / 2 - (COL_WIDTH * 2 + COL_GAP) / 2;
+		// Захист від того самого класу бага й тут: не даємо колонкам піти
+		// за межі екрана на дуже вузьких вікнах/високому GUI Scale.
+		int col1X = Math.max(8, this.width / 2 - (COL_WIDTH * 2 + COL_GAP) / 2);
 		int col2X = col1X + COL_WIDTH + COL_GAP;
 		int y1 = CONTENT_TOP;
 		int y2 = CONTENT_TOP;
@@ -188,6 +200,9 @@ public class ConfigScreen extends Screen {
 						() -> cfg.showFps, v -> cfg.showFps = v);
 				y1 = addCycle(col1X, y1, "Кут екрана", "Де саме малювати панель FPS/координат.",
 						() -> cfg.infoPanelCorner.name(), this::cycleAnyCorner, this::cornerLabel);
+				y1 = addToggle(col1X, y1, "Компас",
+						"Показувати напрям погляду (сторону світу і градуси) в інфо-панелі.",
+						() -> cfg.showCompass, v -> cfg.showCompass = v);
 
 				y2 = addToggle(col2X, y2, "Координата X",
 						"Показати вісь X у панелі координат.",

@@ -54,6 +54,8 @@ public class HudConfig {
 	public boolean showCoordY = false;
 	public boolean showCoordZ = false;
 	public boolean showChunkCoords = false;
+	/** Показувати напрям погляду (N/S/E/W + градуси) в інфо-панелі. */
+	public boolean showCompass = false;
 	/** Де саме показувати панель FPS/координат. */
 	public ScreenCorner infoPanelCorner = ScreenCorner.TOP_RIGHT;
 

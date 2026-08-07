@@ -42,6 +42,13 @@ public class FpsHud {
 			lines.add(new Line("Чанк: " + chunkX + " / " + chunkZ + "  (у чанку " + localX + "," + localZ + ")", 0xAAAAFF));
 		}
 
+		// Компас: напрям погляду. Дрібниця, але корисна в PvP (наприклад
+		// щоб домовитись "рухайся на схід" по чату) і без неї в HUD взагалі
+		// не було жодного способу дізнатись сторону світу без F3.
+		if (mc.player != null && cfg.showCompass) {
+			lines.add(new Line(compassText(mc.player.getYRot()), 0xFFD780));
+		}
+
 		if (lines.isEmpty()) return;
 
 		boolean right = cfg.infoPanelCorner == HudConfig.ScreenCorner.TOP_RIGHT
@@ -59,6 +66,21 @@ public class FpsHud {
 	}
 
 	private record Line(String text, int color) {
+	}
+
+	// Порядок відповідає тому, як зростає ванільний yaw (0=Пд, 90=Зх, 180=Пн, 270/-90=Сх).
+	private static final String[] DIRECTIONS = {
+			"\u041F\u0434 (S)", "\u041F\u0434-\u0417\u0445", "\u0417\u0445 (W)", "\u041F\u043D-\u0417\u0445",
+			"\u041F\u043D (N)", "\u041F\u043D-\u0421\u0445", "\u0421\u0445 (E)", "\u041F\u0434-\u0421\u0445"
+	};
+
+	/** Ванільний yaw: 0 = південь, 90 = захід, 180/-180 = північ, -90 = схід. */
+	private static String compassText(float yaw) {
+		float normalized = Mth.wrapDegrees(yaw);
+		int index = Math.floorMod(Math.round(normalized / 45f), 8);
+		int degrees = Math.round(normalized);
+		if (degrees < 0) degrees += 360;
+		return DIRECTIONS[index] + "  " + degrees + "\u00B0";
 	}
 
 	private static int drawLine(GuiGraphics graphics, Minecraft mc, String text, int color, int y, boolean right) {
