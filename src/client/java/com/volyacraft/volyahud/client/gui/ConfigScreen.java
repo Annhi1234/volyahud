@@ -98,8 +98,8 @@ public class ConfigScreen extends Screen {
 									? HudConfig.ArmorLayout.LINE : HudConfig.ArmorLayout.GRID;
 						}, this::armorLayoutLabel);
 				y1 = addCycle(col1X, y1, "Кут екрана",
-						"У якому нижньому куті малювати свою броню.",
-						() -> cfg.armorCorner.name(), () -> cycleBottomCorner(), this::cornerLabel);
+						"У якому куті малювати свою броню.",
+						() -> cfg.armorCorner.name(), this::cycleArmorCorner, this::cornerLabel);
 				y1 = addToggle(col1X, y1, "Впритул до низу",
 						"Притиснути панель до самого краю екрана (може лягати на хотбар по краях), замість того щоб стояти над ним.",
 						() -> cfg.armorFlushBottom, v -> cfg.armorFlushBottom = v);
@@ -126,11 +126,26 @@ public class ConfigScreen extends Screen {
 						() -> cfg.otherPlayersRenderDistance, v -> cfg.otherPlayersRenderDistance = v, 8, 4, 128);
 
 				y2 = addToggle(col2X, y2, "Бафи цілі",
-						"Показувати активні ефекти гравця, на якого дивишся, у лівому верхньому куті.",
+						"Показувати активні ефекти гравця, на якого дивишся.",
 						() -> cfg.targetBuffsHud, v -> cfg.targetBuffsHud = v);
+				y2 = addCycle(col2X, y2, "Кут екрана",
+						"У якому куті малювати панель бафів цілі.",
+						() -> cfg.targetBuffsCorner.name(), this::cycleTargetBuffsCorner, this::cornerLabel);
+				y2 = addStepper(col2X, y2, "Зсув по X",
+						"Ручне зміщення панелі бафів вбік.",
+						() -> cfg.targetBuffsOffsetX, v -> cfg.targetBuffsOffsetX = v, 4, -300, 300);
+				y2 = addStepper(col2X, y2, "Зсув по Y",
+						"Ручне зміщення панелі бафів вгору/вниз.",
+						() -> cfg.targetBuffsOffsetY, v -> cfg.targetBuffsOffsetY = v, 4, -300, 300);
 				y2 = addToggle(col2X, y2, "Сповіщення про тотем",
 						"Текстове сповіщення, коли поруч хтось використав тотем безсмертя.",
 						() -> cfg.totemAlert, v -> cfg.totemAlert = v);
+				y2 = addStepper(col2X, y2, "Зсув сповіщень по X",
+						"Ручне зміщення банера сповіщень про тотем вбік від центру.",
+						() -> cfg.totemAlertOffsetX, v -> cfg.totemAlertOffsetX = v, 4, -300, 300);
+				y2 = addStepper(col2X, y2, "Зсув сповіщень по Y",
+						"Ручне зміщення банера сповіщень про тотем вгору/вниз.",
+						() -> cfg.totemAlertOffsetY, v -> cfg.totemAlertOffsetY = v, 4, -300, 300);
 			}
 			case THROWS -> {
 				y1 = addToggle(col1X, y1, "Прев'ю траєкторії кидка",
@@ -146,6 +161,12 @@ public class ConfigScreen extends Screen {
 				y2 = addSlider(col2X, y2, "Радіус радара",
 						"Відстань (у блоках), на якій гравці з'являються на індикаторі.",
 						() -> cfg.pvpRadarActivationDistance, v -> cfg.pvpRadarActivationDistance = v, 4, 4, 64);
+				y2 = addStepper(col2X, y2, "Зсув по X",
+						"Ручне зміщення шкали радара вбік від центру.",
+						() -> cfg.pvpRadarOffsetX, v -> cfg.pvpRadarOffsetX = v, 4, -300, 300);
+				y2 = addStepper(col2X, y2, "Зсув по Y",
+						"Ручне зміщення шкали радара вгору/вниз.",
+						() -> cfg.pvpRadarOffsetY, v -> cfg.pvpRadarOffsetY = v, 4, -300, 300);
 			}
 			case BUILD -> {
 				y1 = addToggle(col1X, y1, "Сітка чанка",
@@ -200,6 +221,12 @@ public class ConfigScreen extends Screen {
 						() -> cfg.showFps, v -> cfg.showFps = v);
 				y1 = addCycle(col1X, y1, "Кут екрана", "Де саме малювати панель FPS/координат.",
 						() -> cfg.infoPanelCorner.name(), this::cycleAnyCorner, this::cornerLabel);
+				y1 = addStepper(col1X, y1, "Зсув по X",
+						"Ручне зміщення інфо-панелі вбік.",
+						() -> cfg.infoPanelOffsetX, v -> cfg.infoPanelOffsetX = v, 4, -300, 300);
+				y1 = addStepper(col1X, y1, "Зсув по Y",
+						"Ручне зміщення інфо-панелі вгору/вниз.",
+						() -> cfg.infoPanelOffsetY, v -> cfg.infoPanelOffsetY = v, 4, -300, 300);
 				y1 = addToggle(col1X, y1, "Компас",
 						"Показувати напрям погляду (сторону світу і градуси) в інфо-панелі.",
 						() -> cfg.showCompass, v -> cfg.showCompass = v);
@@ -240,15 +267,26 @@ public class ConfigScreen extends Screen {
 		this.init();
 	}
 
-	private void cycleBottomCorner() {
-		cfg.armorCorner = cfg.armorCorner == HudConfig.ScreenCorner.BOTTOM_LEFT
-				? HudConfig.ScreenCorner.BOTTOM_RIGHT : HudConfig.ScreenCorner.BOTTOM_LEFT;
+	// БАГ-ФІКС/ПОКРАЩЕННЯ: раніше кут своєї броні можна було перемикати лише
+	// між двома нижніми кутами, хоча сам ArmorHud.renderOwn вже давно вміє
+	// малювати панель і зверху (onTop) — тепер кут броні цикається так само,
+	// як і всі інші панелі (мінімапа, інфо-панель, бафи), і всі 4 кути реально доступні.
+	private void cycleArmorCorner() {
+		HudConfig.ScreenCorner[] all = HudConfig.ScreenCorner.values();
+		int next = (cfg.armorCorner.ordinal() + 1) % all.length;
+		cfg.armorCorner = all[next];
 	}
 
 	private void cycleAnyCorner() {
 		HudConfig.ScreenCorner[] all = HudConfig.ScreenCorner.values();
 		int next = (cfg.infoPanelCorner.ordinal() + 1) % all.length;
 		cfg.infoPanelCorner = all[next];
+	}
+
+	private void cycleTargetBuffsCorner() {
+		HudConfig.ScreenCorner[] all = HudConfig.ScreenCorner.values();
+		int next = (cfg.targetBuffsCorner.ordinal() + 1) % all.length;
+		cfg.targetBuffsCorner = all[next];
 	}
 
 	private void cycleMinimapCorner() {

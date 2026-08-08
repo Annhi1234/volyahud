@@ -1,5 +1,6 @@
 package com.volyacraft.volyahud.client.hud;
 
+import com.volyacraft.volyahud.client.config.HudConfig;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.world.entity.Entity;
@@ -38,11 +39,18 @@ public class TotemAlert {
 
 	public static void render(GuiGraphics graphics, Minecraft mc) {
 		if (ACTIVE.isEmpty()) return;
-		int y = 40;
-		int centerX = graphics.guiWidth() / 2;
+		HudConfig cfg = HudConfig.INSTANCE;
+
+		int screenW = graphics.guiWidth();
+		int screenH = graphics.guiHeight();
+		int totalH = ACTIVE.size() * 14;
+
+		int centerX = HudStyle.clampX(screenW / 2 + cfg.totemAlertOffsetX, 0, screenW);
+		int y = HudStyle.clampY(40 + cfg.totemAlertOffsetY, totalH, screenH);
+
 		for (Alert alert : ACTIVE) {
 			int width = mc.font.width(alert.text());
-			graphics.fill(centerX - width / 2 - 4, y - 2, centerX + width / 2 + 4, y + 10, 0x99000000);
+			HudStyle.panel(graphics, centerX - width / 2 - 4, y - 2, centerX + width / 2 + 4, y + 10);
 			graphics.drawCenteredString(mc.font, alert.text(), centerX, y, 0xFFD700);
 			y += 14;
 		}

@@ -1,5 +1,6 @@
 package com.volyacraft.volyahud.client.hud;
 
+import com.volyacraft.volyahud.client.config.HudConfig;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.world.effect.MobEffectInstance;
@@ -39,8 +40,6 @@ public class BuffHud {
 		// Найкоротші за часом ефекти (ті, що от-от зникнуть) — зверху, це найважливіше в PvP.
 		effects.sort(Comparator.comparingInt(MobEffectInstance::getDuration));
 
-		int x = 8;
-		int y = 8;
 		String title = target.getName().getString();
 
 		int lineCount = Math.min(effects.size(), MAX_LINES);
@@ -48,9 +47,25 @@ public class BuffHud {
 		for (int i = 0; i < lineCount; i++) {
 			panelW = Math.max(panelW, mc.font.width(effectLine(effects.get(i))) + 12);
 		}
-		int panelH = 12 + lineCount * 12 + (effects.size() > MAX_LINES ? 12 : 0);
+		panelW += 8;
+		int panelH = 12 + lineCount * 12 + (effects.size() > MAX_LINES ? 12 : 0) + 4;
 
-		graphics.fill(x - 4, y - 3, x + panelW + 4, y + panelH + 1, 0x80000000);
+		HudConfig cfg = HudConfig.INSTANCE;
+		boolean right = cfg.targetBuffsCorner == HudConfig.ScreenCorner.TOP_RIGHT
+				|| cfg.targetBuffsCorner == HudConfig.ScreenCorner.BOTTOM_RIGHT;
+		boolean bottom = cfg.targetBuffsCorner == HudConfig.ScreenCorner.BOTTOM_LEFT
+				|| cfg.targetBuffsCorner == HudConfig.ScreenCorner.BOTTOM_RIGHT;
+
+		int screenW = graphics.guiWidth();
+		int screenH = graphics.guiHeight();
+
+		int x = right ? (screenW - panelW - 8) : 8;
+		int y = bottom ? (screenH - panelH - 8) : 8;
+
+		x = HudStyle.clampX(x + cfg.targetBuffsOffsetX, panelW, screenW);
+		y = HudStyle.clampY(y + cfg.targetBuffsOffsetY, panelH, screenH);
+
+		HudStyle.panel(graphics, x - 4, y - 3, x + panelW - 4, y + panelH - 3);
 
 		graphics.drawString(mc.font, title, x, y, 0xFFFFFF, true);
 		y += 12;

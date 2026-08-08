@@ -75,8 +75,7 @@ public class ArmorHud {
 		x = clamp(x, -panelW + 8, screenW - 8);
 		y = clamp(y, 0, screenH - 8);
 
-		graphics.fill(x - 3, y - 3, x + panelW + 3, y + panelH + 3, 0x60000000);
-		graphics.fill(x - 3, y - 3, x + panelW + 3, y - 2, 0x40FFFFFF); // тонка світла лінія зверху панелі
+		HudStyle.panel(graphics, x - 3, y - 3, x + panelW + 3, y + panelH + 3);
 
 		if (line) {
 			for (int i = 0; i < ROW.length; i++) {
@@ -167,12 +166,27 @@ public class ArmorHud {
 
 			Vector4f clip = new Vector4f((float) wx, (float) wy, (float) wz, 1.0f);
 			clip.mul(viewProj);
-			if (clip.w <= 0.01f) continue; // позаду камери
+			// БАГ-ФІКС ("броня і хп літають по екрану"): поруч із площиною камери
+			// (типово впритул до когось у ближньому бою — саме там, де цей HUD
+			// найпотрібніший) clip.w наближається до нуля, і clip.x/clip.w та
+			// clip.y/clip.w вибухають до астрономічних значень. Далі це множилось
+			// на screenW/screenH і кастилось у int — при переповненні int
+			// координата "переверталась" у випадкове число всередині екрана,
+			// і мітка на кадр стрибала будь-куди замість того, щоб просто
+			// зникнути. Поріг 0.01f був занадто малим, щоб це відсікти.
+			if (clip.w <= 0.3f) continue; // задто близько до камери — не проєктуємо
+
+			double ndcX = clip.x / clip.w;
+			double ndcY = clip.y / clip.w;
+			// Додатковий запобіжник: якщо NDC все одно вийшли за адекватні межі
+			// (NaN/Infinity або багатократно за краєм екрана), не малюємо мітку
+			// замість ризикувати переповненням int при переведенні в пікселі.
+			if (!Double.isFinite(ndcX) || !Double.isFinite(ndcY) || Math.abs(ndcX) > 25 || Math.abs(ndcY) > 25) continue;
 
 			int screenW = mc.getWindow().getGuiScaledWidth();
 			int screenH = mc.getWindow().getGuiScaledHeight();
-			int sx = (int) ((clip.x / clip.w * 0.5 + 0.5) * screenW);
-			int sy = (int) ((1 - (clip.y / clip.w * 0.5 + 0.5)) * screenH);
+			int sx = (int) ((ndcX * 0.5 + 0.5) * screenW);
+			int sy = (int) ((1 - (ndcY * 0.5 + 0.5)) * screenH);
 
 			if (sx < -60 || sx > screenW + 60 || sy < -60 || sy > screenH + 60) continue;
 
@@ -209,7 +223,7 @@ public class ArmorHud {
 				int hpColor = hp > maxHp * 0.5f ? 0x55FF55 : hp > maxHp * 0.2f ? 0xFFFF55 : 0xFF5555;
 				String hpText = Math.round(hp) + "/" + Math.round(maxHp) + " \u2764";
 				int hpW = font.width(hpText);
-				graphics.fill(entry.x() - hpW / 2 - 2, hpY - 1, entry.x() + hpW / 2 + 2, hpY + 9, 0x60000000);
+				HudStyle.panel(graphics, entry.x() - hpW / 2 - 2, hpY - 1, entry.x() + hpW / 2 + 2, hpY + 9);
 				graphics.drawString(font, hpText, entry.x() - hpW / 2, hpY, hpColor, true);
 			}
 
@@ -220,7 +234,7 @@ public class ArmorHud {
 			// Тепер це два повністю незалежні тумблери, як і показано в GUI.
 			if (cfg.otherPlayersArmorHud) {
 				int ix = entry.x() - rowWidth / 2;
-				graphics.fill(ix - 2, armorY - 2, ix + rowWidth + 2, armorY + 18, 0x40000000);
+				HudStyle.panel(graphics, ix - 2, armorY - 2, ix + rowWidth + 2, armorY + 18);
 				for (EquipmentSlot slot : ROW) {
 					ItemStack stack = entry.player().getItemBySlot(slot);
 					if (!stack.isEmpty()) {
@@ -237,11 +251,11 @@ public class ArmorHud {
 				int peekY = armorY - 22;
 				int peekX = entry.x() - 9;
 				if (!mainHand.isEmpty()) {
-					graphics.fill(peekX - 20, peekY - 1, peekX - 2, peekY + 17, 0x40000000);
+					HudStyle.panel(graphics, peekX - 20, peekY - 1, peekX - 2, peekY + 17);
 					graphics.renderItem(mainHand, peekX - 18, peekY);
 				}
 				if (!offHand.isEmpty()) {
-					graphics.fill(peekX + 2, peekY - 1, peekX + 20, peekY + 17, 0x40000000);
+					HudStyle.panel(graphics, peekX + 2, peekY - 1, peekX + 20, peekY + 17);
 					graphics.renderItem(offHand, peekX + 4, peekY);
 				}
 			}

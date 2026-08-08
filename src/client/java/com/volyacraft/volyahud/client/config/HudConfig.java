@@ -58,6 +58,26 @@ public class HudConfig {
 	public boolean showCompass = false;
 	/** Де саме показувати панель FPS/координат. */
 	public ScreenCorner infoPanelCorner = ScreenCorner.TOP_RIGHT;
+	/** Ручне зміщення інфо-панелі по X/Y (px), як і в панелі броні/мінімапи. */
+	public int infoPanelOffsetX = 0;
+	public int infoPanelOffsetY = 0;
+
+	// --- бафи цілі (гравець, на якого дивишся) ---
+	/** У якому куті малювати панель бафів цілі. */
+	public ScreenCorner targetBuffsCorner = ScreenCorner.TOP_LEFT;
+	/** Ручне зміщення панелі бафів по X/Y (px). */
+	public int targetBuffsOffsetX = 0;
+	public int targetBuffsOffsetY = 0;
+
+	// --- сповіщення про тотем ---
+	/** Ручне зміщення банера сповіщень по X/Y (px). За замовчуванням — вгорі по центру. */
+	public int totemAlertOffsetX = 0;
+	public int totemAlertOffsetY = 0;
+
+	// --- індикатор гравців (PvP-радар) ---
+	/** Ручне зміщення горизонтальної шкали PvP-радара по X/Y (px). */
+	public int pvpRadarOffsetX = 0;
+	public int pvpRadarOffsetY = 0;
 
 	// --- налаштовувані параметри ---
 	public double otherPlayersRenderDistance = 40.0;

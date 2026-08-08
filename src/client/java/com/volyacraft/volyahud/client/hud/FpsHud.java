@@ -56,12 +56,28 @@ public class FpsHud {
 		boolean bottom = cfg.infoPanelCorner == HudConfig.ScreenCorner.BOTTOM_LEFT
 				|| cfg.infoPanelCorner == HudConfig.ScreenCorner.BOTTOM_RIGHT;
 
+		int screenW = graphics.guiWidth();
+		int screenH = graphics.guiHeight();
+
 		int lineHeight = 11;
 		int totalH = lines.size() * lineHeight;
-		int y = bottom ? (graphics.guiHeight() - 6 - totalH) : 4;
+		int panelW = 0;
+		for (Line line : lines) {
+			panelW = Math.max(panelW, mc.font.width(line.text()));
+		}
+		panelW += 8;
+
+		int y = bottom ? (screenH - 6 - totalH) : 4;
+		int x = right ? (screenW - panelW - 4) : 4;
+
+		// Ручне зміщення, як і у всіх інших панелях (броня/мінімапа/бафи).
+		x = HudStyle.clampX(x + cfg.infoPanelOffsetX, panelW, screenW);
+		y = HudStyle.clampY(y + cfg.infoPanelOffsetY, totalH, screenH);
+
+		HudStyle.panel(graphics, x - 2, y - 3, x + panelW - 2, y + totalH + 1);
 
 		for (Line line : lines) {
-			y = drawLine(graphics, mc, line.text(), line.color(), y, right);
+			y = drawLine(graphics, mc, line.text(), line.color(), x, y, right, panelW);
 		}
 	}
 
@@ -83,11 +99,10 @@ public class FpsHud {
 		return DIRECTIONS[index] + "  " + degrees + "\u00B0";
 	}
 
-	private static int drawLine(GuiGraphics graphics, Minecraft mc, String text, int color, int y, boolean right) {
+	private static int drawLine(GuiGraphics graphics, Minecraft mc, String text, int color, int panelX, int y, boolean right, int panelW) {
 		int textWidth = mc.font.width(text);
-		int x = right ? (graphics.guiWidth() - textWidth - 6) : 6;
-		graphics.fill(x - 3, y - 2, x + textWidth + 3, y + 9, 0x60000000);
-		graphics.drawString(mc.font, text, x, y, color, true);
+		int textX = right ? (panelX + panelW - textWidth - 4) : (panelX + 2);
+		graphics.drawString(mc.font, text, textX, y, color, true);
 		return y + 11;
 	}
 }

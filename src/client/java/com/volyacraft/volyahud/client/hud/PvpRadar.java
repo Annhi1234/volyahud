@@ -26,15 +26,19 @@ public class PvpRadar {
 
 		int barWidth = 182;
 		int barHeight = 4;
-		int centerX = graphics.guiWidth() / 2;
+		int screenW = graphics.guiWidth();
+		int screenH = graphics.guiHeight();
+
 		// Достатньо високо над хотбаром/хп/голодом/досвідом (у ваніли це все
 		// займає нижні ~54px), щоб панель ніколи не перекривалась з ними.
-		int barY = graphics.guiHeight() - 58;
-		int left = centerX - barWidth / 2;
+		// Ручне зміщення (як і в усіх інших панелях), щоб можна було
+		// розминутись з іншими HUD-елементами.
+		int left = HudStyle.clampX(screenW / 2 - barWidth / 2 + cfg.pvpRadarOffsetX, barWidth, screenW);
+		int barY = HudStyle.clampY(screenH - 58 + cfg.pvpRadarOffsetY, barHeight, screenH);
+		int centerX = left + barWidth / 2;
 
 		// фон + рамка, щоб панель було чітко видно на будь-якому тлі
-		graphics.fill(left - 2, barY - 2, left + barWidth + 2, barY + barHeight + 2, 0x80000000);
-		graphics.fill(left - 2, barY - 2, left + barWidth + 2, barY - 1, 0x60FFFFFF);
+		HudStyle.panel(graphics, left - 2, barY - 2, left + barWidth + 2, barY + barHeight + 2);
 		graphics.fill(left, barY, left + barWidth, barY + barHeight, 0x40FFFFFF);
 		graphics.fill(centerX - 1, barY - 2, centerX + 1, barY + barHeight + 2, 0x80FFFFFF); // мітка "прямо перед собою"
 
