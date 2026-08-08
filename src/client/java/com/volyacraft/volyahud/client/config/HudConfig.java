@@ -47,6 +47,8 @@ public class HudConfig {
 	public boolean targetBuffsHud = true;
 	public boolean inventoryPeek = true;
 	public boolean totemAlert = true;
+	/** Показувати відстань (у блоках) поруч з HP-міткою над іншими гравцями. */
+	public boolean healthTagDistance = true;
 
 	// --- інфо-панель (fps/координати) ---
 	public boolean showFps = false;
@@ -156,6 +158,7 @@ public class HudConfig {
 			try (Reader reader = Files.newBufferedReader(FILE, StandardCharsets.UTF_8)) {
 				HudConfig loaded = GSON.fromJson(reader, HudConfig.class);
 				if (loaded != null) {
+					loaded.sanitize();
 					return loaded;
 				}
 			} catch (IOException | com.google.gson.JsonSyntaxException e) {
@@ -165,6 +168,34 @@ public class HudConfig {
 		HudConfig fresh = new HudConfig();
 		fresh.save();
 		return fresh;
+	}
+
+	/**
+	 * БАГ-ФІКС (важливий, впливає на КОЖНЕ оновлення мода): Gson створює
+	 * об'єкт через Unsafe і НЕ викликає ані конструктор, ані ініціалізатори
+	 * полів — тому будь-яке поле, якого не було в старому volyahud.json
+	 * (наприклад, якщо файл збережений попередньою версією мода, ще до появи
+	 * нового поля), після завантаження стає null, а НЕ тим значенням за
+	 * замовчуванням, що вказане вище (= ScreenCorner.TOP_RIGHT, = new HashMap<>()
+	 * і т.д.). Для enum-полів (armorCorner, minimapCorner, ...) це означало
+	 * NPE одразу при першому натисканні кнопки перемикання кута в меню
+	 * (cycleXCorner() викликає .ordinal() на null); для territoryChunks/
+	 * waypoints — NPE при першому ж рендері кордону території чи мінімапи.
+	 * Тут просто "залатуємо" null на дефолт одразу після завантаження.
+	 */
+	private void sanitize() {
+		if (infoPanelCorner == null) infoPanelCorner = ScreenCorner.TOP_RIGHT;
+		if (targetBuffsCorner == null) targetBuffsCorner = ScreenCorner.TOP_LEFT;
+		if (armorLayout == null) armorLayout = ArmorLayout.GRID;
+		if (armorCorner == null) armorCorner = ScreenCorner.BOTTOM_LEFT;
+		if (minimapCorner == null) minimapCorner = ScreenCorner.TOP_RIGHT;
+		if (territoryChunks == null) territoryChunks = new HashMap<>();
+		if (waypoints == null) waypoints = new HashMap<>();
+		// На випадок пошкодженого/частково записаного файлу — прибираємо
+		// будь-які null-записи всередині самих мап, щоб не впасти пізніше
+		// на territoryChunks.get(dim).contains(...) чи waypointsFor(dim).
+		territoryChunks.values().removeIf(java.util.Objects::isNull);
+		waypoints.values().removeIf(java.util.Objects::isNull);
 	}
 
 	public void save() {

@@ -222,6 +222,11 @@ public class ArmorHud {
 				float maxHp = Math.max(1f, entry.player().getMaxHealth());
 				int hpColor = hp > maxHp * 0.5f ? 0x55FF55 : hp > maxHp * 0.2f ? 0xFFFF55 : 0xFF5555;
 				String hpText = Math.round(hp) + "/" + Math.round(maxHp) + " \u2764";
+				// НОВА ФУНКЦІЯ: відстань до гравця поруч з HP — корисно в PvP,
+				// щоб на око оцінити, чи встигнеш добігти/докинути перлу.
+				if (cfg.healthTagDistance) {
+					hpText += "  " + Math.round(entry.distance()) + "m";
+				}
 				int hpW = font.width(hpText);
 				HudStyle.panel(graphics, entry.x() - hpW / 2 - 2, hpY - 1, entry.x() + hpW / 2 + 2, hpY + 9);
 				graphics.drawString(font, hpText, entry.x() - hpW / 2, hpY, hpColor, true);

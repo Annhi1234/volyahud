@@ -4,7 +4,6 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.BufferBuilder;
 import com.mojang.blaze3d.vertex.BufferUploader;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
-import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.Tesselator;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import com.volyacraft.volyahud.client.config.HudConfig;
@@ -56,34 +55,34 @@ public class TerritoryBorder {
 		int minY = Mth.floor(mc.player.getY()) - WALL_BELOW;
 		int maxY = Mth.floor(mc.player.getY()) + WALL_ABOVE;
 
+		Vec3 camPos = context.camera().getPosition();
+
 		List<float[]> quads = new ArrayList<>();
 
 		for (int cx = pcx - RENDER_RADIUS_CHUNKS; cx <= pcx + RENDER_RADIUS_CHUNKS; cx++) {
 			for (int cz = pcz - RENDER_RADIUS_CHUNKS; cz <= pcz + RENDER_RADIUS_CHUNKS; cz++) {
 				if (!claimed.contains(ChunkPos.asLong(cx, cz))) continue;
 
-				addEdgeIfBorder(claimed, quads, cx, cz, cx + 1, cz, minY, maxY);
-				addEdgeIfBorder(claimed, quads, cx, cz, cx - 1, cz, minY, maxY);
-				addEdgeIfBorder(claimed, quads, cx, cz, cx, cz + 1, minY, maxY);
-				addEdgeIfBorder(claimed, quads, cx, cz, cx, cz - 1, minY, maxY);
+				addEdgeIfBorder(claimed, quads, cx, cz, cx + 1, cz, minY, maxY, camPos);
+				addEdgeIfBorder(claimed, quads, cx, cz, cx - 1, cz, minY, maxY, camPos);
+				addEdgeIfBorder(claimed, quads, cx, cz, cx, cz + 1, minY, maxY, camPos);
+				addEdgeIfBorder(claimed, quads, cx, cz, cx, cz - 1, minY, maxY, camPos);
 			}
 		}
 
 		if (quads.isEmpty()) return;
 
-		Vec3 camPos = context.camera().getPosition();
-		PoseStack matrices = context.matrixStack();
-		matrices.pushPose();
-		matrices.translate(-camPos.x, -camPos.y, -camPos.z);
-		Matrix4f pose = matrices.last().pose();
+		// БАГ-ФІКС (точність далеко від спавну): координати квадів тепер вже
+		// камера-відносні (double, віднято на CPU в addEdgeIfBorder), тому
+		// саму трансляцію камери в матрицю більше не пишемо — лишається лише
+		// поворот, як і скрізь у ArmorHud/ChunkGridOverlay.
+		Matrix4f pose = context.matrixStack().last().pose();
 
 		drawQuads(pose, quads, R, G, B, A);
-
-		matrices.popPose();
 	}
 
-	/** Додає стінку-квад на межі (cx,cz)|(ncx,ncz), тільки якщо сусідній чанк НЕ позначений (тобто це справжня межа території). */
-	private static void addEdgeIfBorder(Set<Long> claimed, List<float[]> quads, int cx, int cz, int ncx, int ncz, int minY, int maxY) {
+	/** Додає стінку-квад на межі (cx,cz)|(ncx,ncz), тільки якщо сусідній чанк НЕ позначений (тобто це справжня межа території). Координати одразу камера-відносні. */
+	private static void addEdgeIfBorder(Set<Long> claimed, List<float[]> quads, int cx, int cz, int ncx, int ncz, int minY, int maxY, Vec3 camPos) {
 		if (claimed.contains(ChunkPos.asLong(ncx, ncz))) return;
 
 		double x1, z1, x2, z2;
@@ -97,11 +96,13 @@ public class TerritoryBorder {
 			x2 = (cx + 1) * 16.0; z2 = wallZ;
 		}
 
+		double relMinY = minY - camPos.y;
+		double relMaxY = maxY - camPos.y;
 		quads.add(new float[] {
-				(float) x1, minY, (float) z1,
-				(float) x2, minY, (float) z2,
-				(float) x2, maxY, (float) z2,
-				(float) x1, maxY, (float) z1
+				(float) (x1 - camPos.x), (float) relMinY, (float) (z1 - camPos.z),
+				(float) (x2 - camPos.x), (float) relMinY, (float) (z2 - camPos.z),
+				(float) (x2 - camPos.x), (float) relMaxY, (float) (z2 - camPos.z),
+				(float) (x1 - camPos.x), (float) relMaxY, (float) (z1 - camPos.z)
 		});
 	}
 

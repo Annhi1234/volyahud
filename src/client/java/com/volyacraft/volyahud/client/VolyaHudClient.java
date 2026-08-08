@@ -74,6 +74,14 @@ public class VolyaHudClient implements ClientModInitializer {
 	private static KeyMapping toggleTerritoryKey;
 	private static KeyMapping claimChunkKey;
 	private static KeyMapping openMapKey;
+	private static KeyMapping toggleHudKey;
+
+	/**
+	 * НОВА ФУНКЦІЯ: швидке приховування ВСЬОГО кастомного HUD одразу (для
+	 * чистих скріншотів/відео), не чіпаючи ванільний F1 і не вимикаючи
+	 * кожен тумблер окремо в меню. За замовчуванням клавіша "." (крапка).
+	 */
+	private static boolean hudHidden = false;
 
 	@Override
 	public void onInitializeClient() {
@@ -122,10 +130,21 @@ public class VolyaHudClient implements ClientModInitializer {
 				"category.volyahud.general"
 		));
 
+		// НОВА ФУНКЦІЯ: "." — миттєво приховати/показати ВЕСЬ кастомний HUD
+		// одразу (для чистих скріншотів/відео), не чіпаючи налаштування
+		// (усі тумблери лишаються такими ж, як були — це лише тимчасова
+		// візуальна пауза до повторного натискання чи виходу з гри).
+		toggleHudKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
+				"key.volyahud.toggle_hud",
+				InputConstants.Type.KEYSYM,
+				GLFW.GLFW_KEY_PERIOD,
+				"category.volyahud.general"
+		));
+
 		// Головний малюнок 2D HUD (броня, PvP-радар, бафи цілі).
 		HudRenderCallback.EVENT.register((graphics, tickDelta) -> {
 			Minecraft mc = Minecraft.getInstance();
-			if (mc.player == null || mc.options.hideGui) return;
+			if (mc.player == null || mc.options.hideGui || hudHidden) return;
 			HudConfig cfg = HudConfig.INSTANCE;
 
 			if (cfg.ownArmorHud) {
@@ -161,7 +180,7 @@ public class VolyaHudClient implements ClientModInitializer {
 		// сітка меж чанка та кордон позначеної території.
 		WorldRenderEvents.AFTER_ENTITIES.register(context -> {
 			Minecraft mc = Minecraft.getInstance();
-			if (mc.player == null) return;
+			if (mc.player == null || hudHidden) return;
 			HudConfig cfg = HudConfig.INSTANCE;
 
 			if (cfg.otherPlayersArmorHud || cfg.healthTags || cfg.inventoryPeek) {
@@ -175,10 +194,19 @@ public class VolyaHudClient implements ClientModInitializer {
 		});
 
 		ClientTickEvents.END_CLIENT_TICK.register(mc -> {
+			// БАГ-ФІКС: KeyMapping у ваніли реагує на "сирий" GLFW-івент клавіші
+			// незалежно від того, чи відкритий екран чату/інвентаря — тобто
+			// набираючи в чаті повідомлення з літерами g/h/j/k/m чи крапкою,
+			// гравець мимоволі смикав ці ж самі гарячі клавіші VolyaHUD.
+			// Тепер усі перемикачі спрацьовують лише тоді, коли жоден екран
+			// не відкритий (те саме правило, що вже й так діяло для openMapKey).
+			boolean noScreen = mc.screen == null;
+
 			while (openConfigKey.consumeClick()) {
-				mc.setScreen(new ConfigScreen(mc.screen));
+				if (noScreen) mc.setScreen(new ConfigScreen(mc.screen));
 			}
 			while (toggleChunkGridKey.consumeClick()) {
+				if (!noScreen) continue;
 				HudConfig cfg = HudConfig.INSTANCE;
 				cfg.chunkGrid = !cfg.chunkGrid;
 				cfg.save();
@@ -188,6 +216,7 @@ public class VolyaHudClient implements ClientModInitializer {
 				}
 			}
 			while (toggleTerritoryKey.consumeClick()) {
+				if (!noScreen) continue;
 				HudConfig cfg = HudConfig.INSTANCE;
 				cfg.territoryBorder = !cfg.territoryBorder;
 				cfg.save();
@@ -197,6 +226,7 @@ public class VolyaHudClient implements ClientModInitializer {
 				}
 			}
 			while (claimChunkKey.consumeClick()) {
+				if (!noScreen) continue;
 				if (mc.player != null && mc.level != null) {
 					String dim = mc.level.dimension().location().toString();
 					int cx = Mth.floor(mc.player.getX()) >> 4;
@@ -207,8 +237,16 @@ public class VolyaHudClient implements ClientModInitializer {
 				}
 			}
 			while (openMapKey.consumeClick()) {
-				if (mc.level != null && mc.screen == null) {
+				if (noScreen && mc.level != null) {
 					mc.setScreen(new MapScreen(null));
+				}
+			}
+			while (toggleHudKey.consumeClick()) {
+				if (!noScreen) continue;
+				hudHidden = !hudHidden;
+				if (mc.player != null) {
+					mc.player.displayClientMessage(Component.literal(
+							hudHidden ? "§7VolyaHUD: §cприховано" : "§7VolyaHUD: §aпоказано"), true);
 				}
 			}
 			safe("Тік траєкторії кидка", () -> PearlTrajectory.tick(mc));

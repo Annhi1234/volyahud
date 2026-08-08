@@ -4,7 +4,6 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.BufferBuilder;
 import com.mojang.blaze3d.vertex.BufferUploader;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
-import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.Tesselator;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import com.volyacraft.volyahud.client.config.HudConfig;
@@ -98,30 +97,40 @@ public class PearlTrajectory {
 		if (mc.player == null || mc.level == null) return;
 		HudConfig cfg = HudConfig.INSTANCE;
 		Vec3 camPos = context.camera().getPosition();
-		PoseStack matrices = context.matrixStack();
 		float partialTick = context.tickCounter().getGameTimeDeltaPartialTick(true);
-
-		matrices.pushPose();
-		matrices.translate(-camPos.x, -camPos.y, -camPos.z);
-		Matrix4f pose = matrices.last().pose();
+		// БАГ-ФІКС (точність далеко від спавну): раніше камеру віднімали
+		// всередині матриці (matrices.translate(-camPos...)) і малювали лінію
+		// в абсолютних світових координатах — на великій відстані від (0,0,0)
+		// це вже великі float-числа, і віднімання на GPU в такій матриці
+		// помітно втрачає точність (лінія трясеться/сіпається). Тепер віднімаємо
+		// позицію камери в double ще на CPU (усі точки нижче вже камера-відносні),
+		// а в матрицю саму трансляцію більше не пишемо.
+		Matrix4f pose = context.matrixStack().last().pose();
 
 		// 1. Прев'ю траєкторії, поки тримаєш предмет у руці
 		if (cfg.pearlTrajectory) {
 			Kind held = heldKind(mc);
 			if (held != null) {
 				List<Vec3> path = simulateThrow(mc, held, partialTick);
-				drawThickLine(pose, path, held.pr, held.pg, held.pb, 0.9f, PREVIEW_WIDTH);
+				drawThickLine(pose, relativeTo(path, camPos), held.pr, held.pg, held.pb, 0.9f, PREVIEW_WIDTH);
 			}
 		}
 
 		// 2. Слід за вже кинутими снарядами
 		if (cfg.pearlTrail) {
 			for (Trail trail : TRAILS.values()) {
-				drawThickLine(pose, trail.points(), trail.kind().tr, trail.kind().tg, trail.kind().tb, 0.95f, TRAIL_WIDTH);
+				drawThickLine(pose, relativeTo(trail.points(), camPos), trail.kind().tr, trail.kind().tg, trail.kind().tb, 0.95f, TRAIL_WIDTH);
 			}
 		}
+	}
 
-		matrices.popPose();
+	/** Переводить список абсолютних світових точок у координати відносно камери (double, ще до касту в float). */
+	private static List<Vec3> relativeTo(List<Vec3> points, Vec3 camPos) {
+		List<Vec3> result = new ArrayList<>(points.size());
+		for (Vec3 p : points) {
+			result.add(p.subtract(camPos));
+		}
+		return result;
 	}
 
 	private static Kind heldKind(Minecraft mc) {

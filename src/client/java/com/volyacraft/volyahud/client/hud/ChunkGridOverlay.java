@@ -57,8 +57,14 @@ public class ChunkGridOverlay {
 
 		Vec3 camPos = context.camera().getPosition();
 		PoseStack matrices = context.matrixStack();
-		matrices.pushPose();
-		matrices.translate(-camPos.x, -camPos.y, -camPos.z);
+		// БАГ-ФІКС (точність далеко від спавну): раніше камеру "врізали" в саму
+		// матрицю (matrices.translate(-camPos...)), а вершини лишались в
+		// абсолютних світових координатах, які на великій відстані від (0,0,0)
+		// (тисячі блоків) — це вже великі float-числа. Віднімання двох великих
+		// float-значень у матриці на GPU дає помітну втрату точності — лінії
+		// сітки починали трястись/двоїтись далеко від спавну. Тепер віднімаємо
+		// позицію камери в double ще на CPU (як і скрізь у ArmorHud), а в
+		// матрицю саму трансляцію більше не пишемо — лишається лише поворот.
 		Matrix4f pose = matrices.last().pose();
 
 		int pcx = Mth.floor(mc.player.getX()) >> 4;
@@ -78,27 +84,25 @@ public class ChunkGridOverlay {
 
 		List<Vec3> segments = new ArrayList<>();
 		for (int cx = -RADIUS_CHUNKS; cx <= RADIUS_CHUNKS + 1; cx++) {
-			double x = (pcx + cx) * 16.0;
+			double x = (pcx + cx) * 16.0 - camPos.x;
 			for (int cz = -RADIUS_CHUNKS; cz <= RADIUS_CHUNKS + 1; cz++) {
-				double z = (pcz + cz) * 16.0;
+				double z = (pcz + cz) * 16.0 - camPos.z;
 				// вертикальний стовпчик на перетині меж (видно й зверху, і знизу)
-				segments.add(new Vec3(x, minY, z));
-				segments.add(new Vec3(x, maxY, z));
+				segments.add(new Vec3(x, minY - camPos.y, z));
+				segments.add(new Vec3(x, maxY - camPos.y, z));
 			}
 			// повна лінія межі чанка по землі вздовж осі Z (справжня "стіна" сітки)
-			segments.add(new Vec3(x, floorY, spanMinZ));
-			segments.add(new Vec3(x, floorY, spanMaxZ));
+			segments.add(new Vec3(x, floorY - camPos.y, spanMinZ - camPos.z));
+			segments.add(new Vec3(x, floorY - camPos.y, spanMaxZ - camPos.z));
 		}
 		for (int cz = -RADIUS_CHUNKS; cz <= RADIUS_CHUNKS + 1; cz++) {
-			double z = (pcz + cz) * 16.0;
+			double z = (pcz + cz) * 16.0 - camPos.z;
 			// і вздовж осі X
-			segments.add(new Vec3(spanMin, floorY, z));
-			segments.add(new Vec3(spanMax, floorY, z));
+			segments.add(new Vec3(spanMin - camPos.x, floorY - camPos.y, z));
+			segments.add(new Vec3(spanMax - camPos.x, floorY - camPos.y, z));
 		}
 
 		drawLines(pose, segments, 0.4f, 0.85f, 1f, 0.5f);
-
-		matrices.popPose();
 
 		// Підписи "16 x 16" на 4 стінах ПОТОЧНОГО чанка. Малюємо їх пізніше,
 		// у 2D HUD-проході — так само, як мітки гравців (ArmorHud/OverlayQueue):
@@ -127,12 +131,20 @@ public class ChunkGridOverlay {
 
 		Vector4f clip = new Vector4f((float) wx, (float) wy, (float) wz, 1.0f);
 		clip.mul(viewProj);
-		if (clip.w <= 0.01f) return; // позаду камери
+		// Той самий клас багу, що й у ArmorHud ("мітки літають по екрану"):
+		// біля площини камери clip.w провалюється до нуля й NDC вибухає до
+		// астрономічних значень, що при кастуванні в int може переповнитись
+		// і "перевернутись" у випадкову точку екрана. Той самий запобіжник.
+		if (clip.w <= 0.3f) return;
+
+		double ndcX = clip.x / clip.w;
+		double ndcY = clip.y / clip.w;
+		if (!Double.isFinite(ndcX) || !Double.isFinite(ndcY) || Math.abs(ndcX) > 25 || Math.abs(ndcY) > 25) return;
 
 		int screenW = mc.getWindow().getGuiScaledWidth();
 		int screenH = mc.getWindow().getGuiScaledHeight();
-		int sx = (int) ((clip.x / clip.w * 0.5 + 0.5) * screenW);
-		int sy = (int) ((1 - (clip.y / clip.w * 0.5 + 0.5)) * screenH);
+		int sx = (int) ((ndcX * 0.5 + 0.5) * screenW);
+		int sy = (int) ((1 - (ndcY * 0.5 + 0.5)) * screenH);
 
 		if (sx < -40 || sx > screenW + 40 || sy < -20 || sy > screenH + 20) return;
 		LABELS.add(new Label(sx, sy, text));

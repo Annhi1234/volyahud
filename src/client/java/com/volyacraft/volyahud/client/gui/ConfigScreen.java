@@ -124,6 +124,9 @@ public class ConfigScreen extends Screen {
 				y1 = addSlider(col1X, y1, "Дистанція показу",
 						"Максимальна відстань (у блоках), на якій показуються мітки гравців.",
 						() -> cfg.otherPlayersRenderDistance, v -> cfg.otherPlayersRenderDistance = v, 8, 4, 128);
+				y1 = addToggle(col1X, y1, "Дистанція в HP-мітці",
+						"Показувати відстань у блоках поруч з HP гравця (наприклад \"18/20 \u2764 12m\").",
+						() -> cfg.healthTagDistance, v -> cfg.healthTagDistance = v);
 
 				y2 = addToggle(col2X, y2, "Бафи цілі",
 						"Показувати активні ефекти гравця, на якого дивишся.",

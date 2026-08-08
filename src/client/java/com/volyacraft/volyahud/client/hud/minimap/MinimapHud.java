@@ -7,6 +7,7 @@ import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.Tesselator;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import com.volyacraft.volyahud.client.config.HudConfig;
+import com.volyacraft.volyahud.client.hud.HudStyle;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.renderer.CoreShaders;
@@ -80,8 +81,7 @@ public final class MinimapHud {
 		x = Mth.clamp(x, 0, Math.max(0, screenW - size));
 		y = Mth.clamp(y, 0, Math.max(0, screenH - size));
 
-		graphics.fill(x - 2, y - 2, x + size + 2, y + size + 2, 0xB0000000);
-		graphics.fill(x - 2, y - 2, x + size + 2, y - 1, 0x60FFFFFF);
+		HudStyle.panel(graphics, x - 2, y - 2, x + size + 2, y + size + 2);
 
 		BlockPos playerPos = mc.player.blockPosition();
 		boolean underground = !mc.level.canSeeSky(playerPos);
