@@ -6,6 +6,7 @@ import net.fabricmc.fabric.api.client.item.v1.ItemTooltipCallback;
 import net.minecraft.core.Holder;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.entity.EquipmentSlotGroup;
@@ -85,7 +86,12 @@ public final class WeaponDamageTooltip {
 				for (EnchantContribution entry : breakdown) {
 					String sign = entry.contribution() >= 0f ? "+" : "";
 					Component name = Enchantment.getFullname(entry.holder(), entry.level());
-					Component line = Component.literal("  \u00A77").append(name)
+					// БАГ-ФІКС (не компілювалось): якщо оголосити змінну як Component,
+					// компілятор бачить лише інтерфейс Component, у якому НЕМАЄ методу
+					// append() (він є лише в MutableComponent, який реально повертає
+					// Component.literal(...)). Через це подальший виклик line.append(...)
+					// нижче не знаходив символ. MutableComponent — правильний тип тут.
+					MutableComponent line = Component.literal("  \u00A77").append(name)
 							.append(Component.literal(" \u00A7f" + sign + fmt(entry.contribution()) + "\u00A77"));
 					if (!isVanilla(entry.holder())) {
 						line = line.append(Component.literal(" (\u043C\u043E\u0434)"));
