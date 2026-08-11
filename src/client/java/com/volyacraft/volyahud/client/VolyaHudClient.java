@@ -8,6 +8,7 @@ import com.volyacraft.volyahud.client.gui.MapScreen;
 import com.volyacraft.volyahud.client.hud.ArmorHud;
 import com.volyacraft.volyahud.client.hud.BuffHud;
 import com.volyacraft.volyahud.client.hud.ChunkGridOverlay;
+import com.volyacraft.volyahud.client.hud.DamageMeter;
 import com.volyacraft.volyahud.client.hud.FpsHud;
 import com.volyacraft.volyahud.client.hud.OverlayQueue;
 import com.volyacraft.volyahud.client.hud.PearlTrajectory;
@@ -16,6 +17,7 @@ import com.volyacraft.volyahud.client.hud.TerritoryBorder;
 import com.volyacraft.volyahud.client.hud.TotemAlert;
 import com.volyacraft.volyahud.client.hud.minimap.ChunkColorCache;
 import com.volyacraft.volyahud.client.hud.minimap.MinimapHud;
+import com.volyacraft.volyahud.client.tooltip.WeaponDamageTooltip;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientChunkEvents;
@@ -86,6 +88,9 @@ public class VolyaHudClient implements ClientModInitializer {
 	@Override
 	public void onInitializeClient() {
 		LOGGER.info("VolyaHUD ініціалізовано");
+
+		// Тултип зброї: розрахунок реальної шкоди по HP (база + чари + крит).
+		WeaponDamageTooltip.register();
 
 		// БАГ-ФІКС (коментар): тут раніше було написано "Ctrl+K", хоча насправді
 		// біндиться сама клавіша K без модифікатора — виправлено лише опис,
@@ -169,6 +174,9 @@ public class VolyaHudClient implements ClientModInitializer {
 			}
 			if (cfg.showFps || cfg.showCoordX || cfg.showCoordY || cfg.showCoordZ || cfg.showChunkCoords || cfg.showCompass) {
 				safe("Інфо-панель", () -> FpsHud.render(graphics, mc));
+			}
+			if (cfg.damageMeter) {
+				safe("Реальна шкода (крит)", () -> DamageMeter.render(graphics, mc));
 			}
 			// Підписи "16 x 16" на стінах поточного чанка (самі лінії — у 3D, нижче).
 			safe("Сітка чанка (підписи)", () -> ChunkGridOverlay.renderHud(graphics, mc));
@@ -254,6 +262,9 @@ public class VolyaHudClient implements ClientModInitializer {
 				safe("Тік сповіщення про тотем", () -> TotemAlert.tick(mc));
 			}
 			safe("Тік мінімапи", () -> MinimapHud.tick(mc));
+			if (HudConfig.INSTANCE.damageMeter) {
+				safe("Тік реальної шкоди", () -> DamageMeter.tick(mc));
+			}
 
 			mapAutosaveTimer++;
 			if (mapAutosaveTimer >= MAP_AUTOSAVE_INTERVAL_TICKS) {

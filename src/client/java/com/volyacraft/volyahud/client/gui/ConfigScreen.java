@@ -31,6 +31,7 @@ public class ConfigScreen extends Screen {
 		BUILD("Будівництво"),
 		MINIMAP("Мінімапа"),
 		INFO("Інфо-панель"),
+		DAMAGE("Шкода"),
 		MISC("Чат і інше");
 
 		final String title;
@@ -116,6 +117,12 @@ public class ConfigScreen extends Screen {
 				y2 = addToggle(col2X, y2, "Показ екіпіровки цілі",
 						"Показувати, що тримає в руках гравець, на якого дивишся.",
 						() -> cfg.inventoryPeek, v -> cfg.inventoryPeek = v);
+				y2 = addStepper(col2X, y2, "Зсув екіпіровки по Y",
+						"Ручне зміщення рядка екіпіровки (і зброї в руках) над головою противника відносно HP. Мінус — далі від HP, плюс — ближче. Не може накластися на HP: зазор нижче завжди підстраховує мінімум 1px.",
+						() -> cfg.otherEquipmentOffsetY, v -> cfg.otherEquipmentOffsetY = v, 2, -60, 60);
+				y2 = addStepper(col2X, y2, "Зазор HP \u2194 екіпіровка",
+						"Бажаний проміжок (px) між рядком HP і рядком екіпіровки над головою противника (і так само між екіпіровкою й зброєю в руках).",
+						() -> cfg.otherHpEquipmentGap, v -> cfg.otherHpEquipmentGap = v, 1, 1, 20);
 			}
 			case PLAYERS -> {
 				y1 = addToggle(col1X, y1, "HP-мітки над гравцями",
@@ -127,6 +134,9 @@ public class ConfigScreen extends Screen {
 				y1 = addToggle(col1X, y1, "Дистанція в HP-мітці",
 						"Показувати відстань у блоках поруч з HP гравця (наприклад \"18/20 \u2764 12m\").",
 						() -> cfg.healthTagDistance, v -> cfg.healthTagDistance = v);
+				y1 = addStepper(col1X, y1, "Зсув HP по Y",
+						"Ручне зміщення рядка HP над головою противника відносно ніка. Мінус — далі від ніка (вище), плюс — ближче. Рухає разом із собою й екіпіровку/зброю над ним, тому стос не розсипається.",
+						() -> cfg.otherHpOffsetY, v -> cfg.otherHpOffsetY = v, 2, -60, 60);
 
 				y2 = addToggle(col2X, y2, "Бафи цілі",
 						"Показувати активні ефекти гравця, на якого дивишся.",
@@ -247,7 +257,32 @@ public class ConfigScreen extends Screen {
 						"Показати номер чанка та позицію в ньому.",
 						() -> cfg.showChunkCoords, v -> cfg.showChunkCoords = v);
 			}
+			case DAMAGE -> {
+				y1 = addToggle(col1X, y1, "Реальна шкода при криті",
+						"Окрема панель: скільки HP ми ФАКТИЧНО зняли цілі своїм критичним ударом, і скільки нам ФАКТИЧНО зняв критом противник (не \"сирий\" урон предмета, а вже з урахуванням броні/зачарувань/абсорбції).",
+						() -> cfg.damageMeter, v -> cfg.damageMeter = v);
+				y1 = addToggle(col1X, y1, "Над прицілом",
+						"Показувати панель по центру екрана, трохи вище прицілу, замість кута екрана.",
+						() -> cfg.damageMeterAboveCrosshair, v -> cfg.damageMeterAboveCrosshair = v);
+				y1 = addSlider(col1X, y1, "Розмір тексту",
+						"Масштаб шрифту панелі: 1.0 — звичайний розмір, менше — дрібніший і компактніший текст.",
+						() -> (double) cfg.damageMeterScale, v -> cfg.damageMeterScale = (float) v, 0.1, 0.4, 1.5);
+
+				y2 = addCycle(col2X, y2, "Кут екрана",
+						"У якому куті малювати панель шкоди, коли вона НЕ над прицілом.",
+						() -> cfg.damageMeterCorner.name(), this::cycleDamageMeterCorner, this::cornerLabel);
+				y2 = addStepper(col2X, y2, "Зсув по X",
+						"Ручне зміщення панелі шкоди вбік.",
+						() -> cfg.damageMeterOffsetX, v -> cfg.damageMeterOffsetX = v, 4, -300, 300);
+				y2 = addStepper(col2X, y2, "Зсув по Y",
+						"Ручне зміщення панелі шкоди вгору/вниз. За замовчуванням трохи опущена, щоб стояти під панеллю FPS/координат.",
+						() -> cfg.damageMeterOffsetY, v -> cfg.damageMeterOffsetY = v, 4, -300, 300);
+			}
 			case MISC -> {
+				y1 = addToggle(col1X, y1, "Шкода в тултипі зброї",
+						"При наведенні на меч/сокиру в інвентарі дописує розраховану реальну шкоду по HP: базовий урон + усі зачарування, що впливають на шкоду (Sharpness/Smite/Bane of Arthropods, а також кастомні чари з модів на кшталт ExcellentEnchants) з урахуванням рівня кожного, окремо критичний удар.",
+						() -> cfg.weaponDamageTooltip, v -> cfg.weaponDamageTooltip = v);
+
 				// Ширина чату — реальна ванільна опція гри, щоб не робити окремий
 				// кастомний рендер чату (і не конфліктувати з ним): просто даємо
 				// швидкий доступ до повзунка ширини прямо з нашого меню.
@@ -290,6 +325,12 @@ public class ConfigScreen extends Screen {
 		HudConfig.ScreenCorner[] all = HudConfig.ScreenCorner.values();
 		int next = (cfg.targetBuffsCorner.ordinal() + 1) % all.length;
 		cfg.targetBuffsCorner = all[next];
+	}
+
+	private void cycleDamageMeterCorner() {
+		HudConfig.ScreenCorner[] all = HudConfig.ScreenCorner.values();
+		int next = (cfg.damageMeterCorner.ordinal() + 1) % all.length;
+		cfg.damageMeterCorner = all[next];
 	}
 
 	private void cycleMinimapCorner() {

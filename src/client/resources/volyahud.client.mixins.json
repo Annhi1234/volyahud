@@ -3,7 +3,8 @@
 	"package": "com.volyacraft.volyahud.client.mixin",
 	"compatibilityLevel": "JAVA_21",
 	"client": [
-		"ClientPacketListenerMixin"
+		"ClientPacketListenerMixin",
+		"MultiPlayerGameModeMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

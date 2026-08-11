@@ -94,7 +94,7 @@ public class ArmorHud {
 	}
 
 	private static void drawSlot(GuiGraphics graphics, Minecraft mc, ItemStack stack, int x, int y) {
-		graphics.fill(x, y, x + SLOT, y + SLOT, 0x40000000);
+		HudStyle.mcSlot(graphics, x, y, SLOT);
 		if (stack.isEmpty()) return;
 
 		int ix = x + (SLOT - 16) / 2;
@@ -194,74 +194,138 @@ public class ArmorHud {
 		}
 	}
 
+	// Розмір комірки екіпіровки над головою іншого гравця. Навмисно менший за
+	// власну панель (SLOT=20), щоб увесь блок лишався компактним і не
+	// заступав огляд у PvP; 18px — це той самий розмір, що й у ванільному
+	// інвентарі (16px іконка + по 1px рамки з кожного боку).
+	private static final int OTHER_SLOT = 18;
+	private static final int OTHER_ROW_W = ROW.length * OTHER_SLOT;
+	// Висота рядка HP (текст + внутрішні відступи фону).
+	private static final int HP_ROW_H = 10;
+	// Абсолютний мінімальний проміжок (px) між сусідніми рядками стосу.
+	// Незалежно від того, який зазор виставлено в налаштуваннях (otherHpEquipmentGap)
+	// і які ручні offsetY застосовані, рендер нижче ніколи не дає фактичній
+	// відстані впасти менше за це значення — тому рядки НЕ можуть накластися
+	// одне на одного, хай там які значення хтось виставить у меню.
+	private static final int MIN_ROW_GAP = 1;
+
 	/**
 	 * Малює накопичені за цей кадр мітки гравців (заповнюється в renderOthers,
-	 * викликається останнім проходом HudRenderCallback). Порядок знизу вгору
-	 * над головою: [нік (малює ваніла)] -> [HP] -> [броня] -> [зброя в руках].
+	 * викликається останнім проходом HudRenderCallback).
 	 *
-	 * Раніше % міцності броні малювався ПІД рядом іконок і на 1px залазив на
-	 * рядок HP над ним — тепер, як і у власній броні, % малюється прямо
-	 * поверх іконки, тому рядки більше не накладаються одне на одне.
+	 * Блок над головою противника має ЧІТКИЙ, завжди однаковий порядок рядків
+	 * знизу вгору (кожен наступний рядок відраховується від розміру
+	 * попереднього, тому порядок не може "поплисти", а рядки — накластися):
+	 *   1) [нік]           — малює сама ваніла;
+	 *   2) [HP]            — поточне здоров'я (+ дистанція), одразу над ніком;
+	 *   3) [екіпіровка]    — компактний ряд слотів шолом/нагрудник/штани/чоботи;
+	 *   4) [зброя в руках] — предмет в основній та другорядній руці.
+	 * Усі рядки центруються по тій самій X-координаті (entry.x()), яку
+	 * renderOthers() щокадру перераховує з інтерпольованої позиції гравця —
+	 * тому блок лишається строго над головою і не "відстає"/не гуляє вліво-
+	 * вправо під час руху, стрибків чи бою: він рухається синхронно з моделлю.
+	 *
+	 * Позиція HP (otherHpOffsetY) і позиція екіпіровки (otherEquipmentOffsetY)
+	 * та зазор між ними (otherHpEquipmentGap) — окремо налаштовувані з меню.
+	 * HP-зсув рухає HP-рядок і все, що стосом стоїть над ним (екіпіровку,
+	 * зброю), — тому вони завжди їдуть разом, як один блок, замість того щоб
+	 * "розсипатись". Зсув екіпіровки рухає лише блок екіпіровка+зброя
+	 * відносно HP. Обидва зсуви в кінці проганяються через MIN_ROW_GAP, тож
+	 * хай яке значення виставить користувач — рядки фізично не можуть
+	 * накластися одне на одного.
 	 */
 	public static void drawQueuedOverlays(GuiGraphics graphics, Minecraft mc) {
 		HudConfig cfg = HudConfig.INSTANCE;
 		Font font = mc.font;
-
-		int rowWidth = ROW.length * (16 + 2) - 2;
+		int gap = Math.max(MIN_ROW_GAP, cfg.otherHpEquipmentGap);
 
 		for (OverlayQueue.Entry entry : OverlayQueue.drain()) {
 			if (entry.player().isRemoved() || !entry.player().isAlive()) continue;
 
+			int centerX = entry.x();
 			// entry.y() відповідає приблизно висоті, де ваніла малює нік гравця.
 			int nickY = entry.y();
-			int hpY = nickY - 12;
-			int armorY = hpY - 20;
+
+			int hpY = nickY - gap - HP_ROW_H + cfg.otherHpOffsetY;
+
+			// Бажана позиція екіпіровки — заданий зазор над HP плюс ручний
+			// зсув користувача, але з гарантованим мінімумом MIN_ROW_GAP між
+			// нижнім краєм екіпіровки і верхнім краєм HP, навіть якщо offsetY
+			// зсуває рядки назустріч один одному.
+			int armorY = Math.min(
+					hpY - gap - OTHER_SLOT + cfg.otherEquipmentOffsetY,
+					hpY - MIN_ROW_GAP - OTHER_SLOT
+			);
+			int peekY = Math.min(armorY - gap - OTHER_SLOT, armorY - MIN_ROW_GAP - OTHER_SLOT);
 
 			if (cfg.healthTags) {
 				float hp = Math.max(0f, entry.player().getHealth());
 				float maxHp = Math.max(1f, entry.player().getMaxHealth());
 				int hpColor = hp > maxHp * 0.5f ? 0x55FF55 : hp > maxHp * 0.2f ? 0xFFFF55 : 0xFF5555;
 				String hpText = Math.round(hp) + "/" + Math.round(maxHp) + " \u2764";
-				// НОВА ФУНКЦІЯ: відстань до гравця поруч з HP — корисно в PvP,
-				// щоб на око оцінити, чи встигнеш добігти/докинути перлу.
+				// Відстань до гравця поруч з HP — корисно в PvP, щоб на око
+				// оцінити, чи встигнеш добігти/докинути перлу.
 				if (cfg.healthTagDistance) {
 					hpText += "  " + Math.round(entry.distance()) + "m";
 				}
 				int hpW = font.width(hpText);
-				HudStyle.panel(graphics, entry.x() - hpW / 2 - 2, hpY - 1, entry.x() + hpW / 2 + 2, hpY + 9);
-				graphics.drawString(font, hpText, entry.x() - hpW / 2, hpY, hpColor, true);
+				HudStyle.panel(graphics, centerX - hpW / 2 - 2, hpY - 1, centerX + hpW / 2 + 2, hpY + 9);
+				graphics.drawString(font, hpText, centerX - hpW / 2, hpY, hpColor, true);
 			}
 
-			// БАГ-ФІКС: раніше блок inventoryPeek був ВКЛАДЕНИЙ усередину
-			// "if (cfg.otherPlayersArmorHud)", тож "Показ екіпіровки цілі"
-			// у меню налаштувань насправді не працював сам по собі — предмети
-			// в руках цілі показувались, лише якщо ЩЕ й броня була увімкнена.
-			// Тепер це два повністю незалежні тумблери, як і показано в GUI.
+			// Ряд екіпіровки: компактний "інвентарний" рядок з 4 слотів у
+			// стилі ваніли (HudStyle.mcSlot — сіра утоплена комірка з рамкою
+			// й фаскою, як у справжньому GUI), у фіксованому порядку зліва
+			// направо: шолом -> нагрудник -> штани -> чоботи (ROW). Слоти
+			// домальовуються навіть якщо предмет відсутній (порожня комірка),
+			// тому позиція кожного типу броні завжди однакова і не "стрибає"
+			// залежно від того, що зараз надіте на противника.
 			if (cfg.otherPlayersArmorHud) {
-				int ix = entry.x() - rowWidth / 2;
-				HudStyle.panel(graphics, ix - 2, armorY - 2, ix + rowWidth + 2, armorY + 18);
+				int ix = centerX - OTHER_ROW_W / 2;
+				HudStyle.panel(graphics, ix - 2, armorY - 2, ix + OTHER_ROW_W + 2, armorY + OTHER_SLOT + 2);
 				for (EquipmentSlot slot : ROW) {
 					ItemStack stack = entry.player().getItemBySlot(slot);
+					HudStyle.mcSlot(graphics, ix, armorY, OTHER_SLOT);
 					if (!stack.isEmpty()) {
-						graphics.renderItem(stack, ix, armorY);
-						drawDurabilityOverlay(graphics, font, stack, ix, armorY, 16, 16);
+						int iconX = ix + (OTHER_SLOT - 16) / 2;
+						int iconY = armorY + (OTHER_SLOT - 16) / 2;
+						graphics.renderItem(stack, iconX, iconY);
+						drawDurabilityOverlay(graphics, font, stack, ix, armorY, OTHER_SLOT, OTHER_SLOT);
 					}
-					ix += 18;
+					ix += OTHER_SLOT;
 				}
 			}
 
+			// Ряд зброї в руках: до 2 слотів (основна + другорядна рука) тим
+			// самим ванільним стилем, що й екіпіровка. Ряд завжди над
+			// екіпіровкою (peekY < armorY), тому навіть при увімкнених обох
+			// опціях блоки ніколи не перекриваються.
 			if (cfg.inventoryPeek) {
 				ItemStack mainHand = entry.player().getMainHandItem();
 				ItemStack offHand = entry.player().getOffhandItem();
-				int peekY = armorY - 22;
-				int peekX = entry.x() - 9;
-				if (!mainHand.isEmpty()) {
-					HudStyle.panel(graphics, peekX - 20, peekY - 1, peekX - 2, peekY + 17);
-					graphics.renderItem(mainHand, peekX - 18, peekY);
-				}
-				if (!offHand.isEmpty()) {
-					HudStyle.panel(graphics, peekX + 2, peekY - 1, peekX + 20, peekY + 17);
-					graphics.renderItem(offHand, peekX + 4, peekY);
+				boolean hasMain = !mainHand.isEmpty();
+				boolean hasOff = !offHand.isEmpty();
+				if (hasMain || hasOff) {
+					int cellGap = 2;
+					int cells = (hasMain ? 1 : 0) + (hasOff ? 1 : 0);
+					int totalW = cells * OTHER_SLOT + (cells - 1) * cellGap;
+					int px = centerX - totalW / 2;
+					HudStyle.panel(graphics, px - 2, peekY - 2, px + totalW + 2, peekY + OTHER_SLOT + 2);
+					if (hasMain) {
+						HudStyle.mcSlot(graphics, px, peekY, OTHER_SLOT);
+						int iconX = px + (OTHER_SLOT - 16) / 2;
+						int iconY = peekY + (OTHER_SLOT - 16) / 2;
+						graphics.renderItem(mainHand, iconX, iconY);
+						drawDurabilityOverlay(graphics, font, mainHand, px, peekY, OTHER_SLOT, OTHER_SLOT);
+						px += OTHER_SLOT + cellGap;
+					}
+					if (hasOff) {
+						HudStyle.mcSlot(graphics, px, peekY, OTHER_SLOT);
+						int iconX = px + (OTHER_SLOT - 16) / 2;
+						int iconY = peekY + (OTHER_SLOT - 16) / 2;
+						graphics.renderItem(offHand, iconX, iconY);
+						drawDurabilityOverlay(graphics, font, offHand, px, peekY, OTHER_SLOT, OTHER_SLOT);
+					}
 				}
 			}
 		}
