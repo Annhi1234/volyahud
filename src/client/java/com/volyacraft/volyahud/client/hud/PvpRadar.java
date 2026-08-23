@@ -19,9 +19,24 @@ public class PvpRadar {
 		if (self == null || mc.level == null) return;
 
 		HudConfig cfg = HudConfig.INSTANCE;
-		boolean anyNearby = mc.level.players().stream()
-				.filter(p -> p != self)
-				.anyMatch(p -> p.distanceTo(self) <= cfg.pvpRadarActivationDistance);
+		// ОПТИМІЗАЦІЯ: раніше тут було ДВА окремих проходи по списку гравців
+		// щокадру — спершу Stream.anyMatch() (з алокацією лямбд/ітератора
+		// стріму лише щоб перевірити "чи взагалі є хтось поруч"), а потім ще
+		// раз звичайний for-each нижче для самого малювання. Список гравців
+		// на сервері вже й так невеликий, тому це не критично, але на
+		// PvP-серверах із десятками гравців поруч це подвійна робота щокадру
+		// без жодної користі. Тепер лише один прохід звичайним циклом:
+		// одразу малюємо крапки й попутно рахуємо anyNearby.
+		var players = mc.level.players();
+		boolean anyNearby = false;
+		for (int i = 0, n = players.size(); i < n; i++) {
+			Player other = players.get(i);
+			if (other == self) continue;
+			if (other.distanceTo(self) <= cfg.pvpRadarActivationDistance) {
+				anyNearby = true;
+				break;
+			}
+		}
 		if (!anyNearby) return;
 
 		int barWidth = 182;
@@ -49,7 +64,8 @@ public class PvpRadar {
 		boolean enemyBehindLeft = false;
 		boolean enemyBehindRight = false;
 
-		for (Player other : mc.level.players()) {
+		for (int i = 0, n = players.size(); i < n; i++) {
+			Player other = players.get(i);
 			if (other == self) continue;
 			double dist = other.distanceTo(self);
 			if (dist > cfg.pvpRadarActivationDistance) continue;

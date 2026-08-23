@@ -1,5 +1,6 @@
 package com.volyacraft.volyahud.client.mixin;
 
+import com.volyacraft.volyahud.client.hud.CombatTimer;
 import com.volyacraft.volyahud.client.hud.DamageMeter;
 import net.minecraft.client.multiplayer.MultiPlayerGameMode;
 import net.minecraft.world.entity.Entity;
@@ -14,7 +15,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * гравець б'є лівою кнопкою миші по цілі. Потрібно системі реальної шкоди
  * (DamageMeter), щоб зіставити наступний крит-івент (id 4/5, ловиться в
  * ClientPacketListenerMixin) із конкретною ціллю та зняти її здоров'я
- * "до" удару.
+ * "до" удару, а також таймеру бою (CombatTimer) — атака по іншому гравцю
+ * теж вважається початком бою, навіть якщо у відповідь нас іще не вдарили.
  *
  * Тільки читає ціль, нічого не змінює й не скасовує (HEAD-інжект без cancel).
  */
@@ -24,5 +26,8 @@ public class MultiPlayerGameModeMixin {
 	@Inject(method = "attack", at = @At("HEAD"))
 	private void volyahud$onAttack(Player player, Entity target, CallbackInfo ci) {
 		DamageMeter.onAttack(target);
+		if (target instanceof Player && com.volyacraft.volyahud.client.config.HudConfig.INSTANCE.combatTimer) {
+			CombatTimer.onAttackPlayer();
+		}
 	}
 }

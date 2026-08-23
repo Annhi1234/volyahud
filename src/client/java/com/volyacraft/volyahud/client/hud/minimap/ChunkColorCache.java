@@ -16,9 +16,14 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 
@@ -118,24 +123,86 @@ public final class ChunkColorCache {
 		}
 	}
 
+	/**
+	 * ОПТИМІЗАЦІЯ (джерело періодичних "стутерів"/лагів): раніше збереження
+	 * карти (GZIP-стиснення й запис на диск, викликається кожні ~30с з
+	 * {@code VolyaHudClient} автозбереженням, а також при виході з гри)
+	 * виконувалось СИНХРОННО прямо в ігровому клієнтському потоці. Для
+	 * великої дослідженої карти (тисячі чанків, кожен по 256 int) це
+	 * реальні мегабайти даних, і диск-I/O + GZIP-стиснення на головному
+	 * потоці — це якраз та "коротка заморозка кожні 30 секунд", яку
+	 * помічають як лаги. Дані для запису — це вже незалежний знімок
+	 * (копія мапи), тому саме стиснення й запис можна спокійно виконати
+	 * у фоновому потоці, не блокуючи рендер/тік.
+	 * <p>
+	 * Один виділений daemon-потік (не пул) — записи все одно послідовні
+	 * за задумом (по одному файлу на світ), і daemon-статус гарантує, що
+	 * потік не завадить JVM закритися, якщо гра вилітає саме в момент запису.
+	 */
+	private static final ExecutorService SAVE_EXECUTOR = Executors.newSingleThreadExecutor(
+			(ThreadFactory) r -> {
+				Thread t = new Thread(r, "VolyaHUD-MapSave");
+				t.setDaemon(true);
+				return t;
+			});
+
+	/** Захист від накопичення застарілих задач у черзі, якщо збереження раптом не встигає за автозбереженнями (не мало б статись за звичайних умов, але про всяк випадок). */
+	private static final AtomicBoolean SAVE_IN_PROGRESS = new AtomicBoolean(false);
+
 	public static void saveWorld() {
 		String worldKey = currentWorldKey;
 		if (worldKey == null || CACHE.isEmpty()) return;
-		Path file = saveFile(worldKey);
+		if (!SAVE_IN_PROGRESS.compareAndSet(false, true)) {
+			// Попереднє збереження ще не завершилось — пропускаємо цей раз,
+			// наступне автозбереження за ~30с однаково повторить спробу.
+			return;
+		}
 
-		try {
-			Files.createDirectories(file.getParent());
-			try (DataOutputStream out = new DataOutputStream(new GZIPOutputStream(Files.newOutputStream(file)))) {
-				out.writeInt(CACHE.size());
-				for (Map.Entry<String, Map<Long, int[]>> dimEntry : CACHE.entrySet()) {
-					out.writeUTF(dimEntry.getKey());
-					out.writeInt(dimEntry.getValue().size());
-					for (Map.Entry<Long, int[]> chunkEntry : dimEntry.getValue().entrySet()) {
-						out.writeLong(chunkEntry.getKey());
-						for (int c : chunkEntry.getValue()) out.writeInt(c);
-					}
+		// Знімок посилань на мапи знімається одразу тут (у виклику з ігрового
+		// потоку) — сам ConcurrentHashMap і масиви int[] всередині вже й так
+		// потокобезпечні на читання, тому фоновому потоку достатньо цієї
+		// неглибокої копії структури, без копіювання самих даних.
+		Map<String, Map<Long, int[]>> snapshot = new HashMap<>(CACHE);
+
+		SAVE_EXECUTOR.submit(() -> {
+			try {
+				writeToDisk(worldKey, snapshot);
+			} catch (IOException e) {
+				VolyaHudClient.LOGGER.warn("VolyaHUD: не вдалося зберегти карту ({})", e.toString());
+			} finally {
+				SAVE_IN_PROGRESS.set(false);
+			}
+		});
+	}
+
+	private static void writeToDisk(String worldKey, Map<String, Map<Long, int[]>> snapshot) throws IOException {
+		Path file = saveFile(worldKey);
+		Files.createDirectories(file.getParent());
+		try (DataOutputStream out = new DataOutputStream(new GZIPOutputStream(Files.newOutputStream(file)))) {
+			out.writeInt(snapshot.size());
+			for (Map.Entry<String, Map<Long, int[]>> dimEntry : snapshot.entrySet()) {
+				out.writeUTF(dimEntry.getKey());
+				out.writeInt(dimEntry.getValue().size());
+				for (Map.Entry<Long, int[]> chunkEntry : dimEntry.getValue().entrySet()) {
+					out.writeLong(chunkEntry.getKey());
+					for (int c : chunkEntry.getValue()) out.writeInt(c);
 				}
 			}
+		}
+	}
+
+	/**
+	 * Синхронна версія — використовується лише там, де потрібна ГАРАНТІЯ,
+	 * що файл записаний до повернення з методу (наприклад, якщо гру
+	 * закривають повністю і фоновий потік просто не встигне доробити).
+	 * Викликається з {@code ClientPlayConnectionEvents.DISCONNECT}, де
+	 * коротка затримка при виході з сервера прийнятна (це не ігровий кадр).
+	 */
+	public static void saveWorldBlocking() {
+		String worldKey = currentWorldKey;
+		if (worldKey == null || CACHE.isEmpty()) return;
+		try {
+			writeToDisk(worldKey, new HashMap<>(CACHE));
 		} catch (IOException e) {
 			VolyaHudClient.LOGGER.warn("VolyaHUD: не вдалося зберегти карту ({})", e.toString());
 		}

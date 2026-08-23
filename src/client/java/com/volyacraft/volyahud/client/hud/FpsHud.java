@@ -49,6 +49,13 @@ public class FpsHud {
 			lines.add(new Line(compassText(mc.player.getYRot()), 0xFFD780));
 		}
 
+		// НОВА ФУНКЦІЯ: таймер "бойового тегу" — видно лише поки бій активний,
+		// тому в спокійному стані рядок просто не додається (панель не займає
+		// зайвого місця, якщо бою немає).
+		if (mc.player != null && cfg.combatTimer && CombatTimer.isActive()) {
+			lines.add(new Line("\u2694 Бій: " + CombatTimer.secondsLeft() + "с", 0xFF7777));
+		}
+
 		if (lines.isEmpty()) return;
 
 		boolean right = cfg.infoPanelCorner == HudConfig.ScreenCorner.TOP_RIGHT

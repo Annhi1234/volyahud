@@ -140,7 +140,40 @@ public class MapScreen extends Screen {
 		super.render(graphics, mouseX, mouseY, partialTick);
 	}
 
+	// ОПТИМІЗАЦІЯ (та сама проблема, що й у MinimapHud): раніше весь рельєф
+	// перебудовувався заново на КОЖНОМУ кадрі, поки карта відкрита — навіть
+	// якщо гравець просто нерухомо дивиться на неї (не тягне мишею й не крутить
+	// колесо). На великих зумах це перебір десятків тисяч блоків щосекунди
+	// заради картинки, яка й так не змінюється. Тепер буфер квадів (примітивний
+	// float[], без боксингу в List<float[]>) перебудовується лише тоді, коли
+	// реально змінився вигляд карти (панорама/зум/розмір вікна/вимір), а не на
+	// кожен виклик render().
+	private float[] quadBuf = new float[64 * 8];
+	private int quadFloats = 0;
+	private double cachedViewX = Double.NaN, cachedViewZ = Double.NaN;
+	private int cachedPxPerBlock = -1, cachedMapAreaW = -1, cachedHeight = -1;
+	private long lastRebuildAtMs = 0L;
+	/** Навіть якщо вигляд не змінився, раз на ~500мс усе одно освіжаємо буфер —
+	 * щоб щойно довантажені сервером чанки з'являлись на відкритій карті, поки
+	 * гравець нерухомо на неї дивиться, а не лише після наступного панорамування/зуму. */
+	private static final long PERIODIC_REFRESH_MS = 500;
+
 	private void drawTerrain(GuiGraphics graphics, int mapAreaW) {
+		long now = System.currentTimeMillis();
+		boolean viewChanged = viewX != cachedViewX || viewZ != cachedViewZ
+				|| pxPerBlock != cachedPxPerBlock || mapAreaW != cachedMapAreaW || this.height != cachedHeight;
+		boolean staleTimeout = now - lastRebuildAtMs >= PERIODIC_REFRESH_MS;
+		if (viewChanged || staleTimeout) {
+			rebuildTerrainBuffer(mapAreaW);
+			cachedViewX = viewX; cachedViewZ = viewZ;
+			cachedPxPerBlock = pxPerBlock; cachedMapAreaW = mapAreaW; cachedHeight = this.height;
+			lastRebuildAtMs = now;
+		}
+		drawQuadBufferBatched(graphics);
+	}
+
+	private void rebuildTerrainBuffer(int mapAreaW) {
+		quadFloats = 0;
 		float centerX = mapAreaW / 2f;
 		float centerY = this.height / 2f;
 
@@ -152,7 +185,6 @@ public class MapScreen extends Screen {
 		int cz0 = (int) Math.floor((viewZ - blocksHalfY)) >> 4;
 		int cz1 = (int) Math.floor((viewZ + blocksHalfY)) >> 4;
 
-		List<float[]> quads = new ArrayList<>();
 		for (int cx = cx0; cx <= cx1; cx++) {
 			for (int cz = cz0; cz <= cz1; cz++) {
 				int[] colors = ChunkColorCache.getOrNull(dimensionKey, cx, cz);
@@ -166,12 +198,60 @@ public class MapScreen extends Screen {
 						float sx = centerX + (float) ((wx - viewX) * pxPerBlock);
 						float sy = centerY + (float) ((wz - viewZ) * pxPerBlock);
 						if (sx < -pxPerBlock || sy < -pxPerBlock || sx > mapAreaW + pxPerBlock || sy > this.height + pxPerBlock) continue;
-						addQuad(quads, sx, sy, sx + pxPerBlock, sy + pxPerBlock, argb);
+						pushQuad(sx, sy, sx + pxPerBlock, sy + pxPerBlock, argb);
 					}
 				}
 			}
 		}
-		drawQuadsBatched(graphics, quads);
+	}
+
+	private void ensureQuadCapacity(int neededFloats) {
+		if (quadBuf.length < neededFloats) {
+			int newLen = quadBuf.length;
+			while (newLen < neededFloats) newLen *= 2;
+			quadBuf = java.util.Arrays.copyOf(quadBuf, newLen);
+		}
+	}
+
+	private void pushQuad(float x1, float y1, float x2, float y2, int argb) {
+		ensureQuadCapacity(quadFloats + 8);
+		float a = ((argb >>> 24) & 0xFF) / 255f;
+		float r = ((argb >>> 16) & 0xFF) / 255f;
+		float g = ((argb >>> 8) & 0xFF) / 255f;
+		float b = (argb & 0xFF) / 255f;
+		quadBuf[quadFloats] = x1;
+		quadBuf[quadFloats + 1] = y1;
+		quadBuf[quadFloats + 2] = x2;
+		quadBuf[quadFloats + 3] = y2;
+		quadBuf[quadFloats + 4] = r;
+		quadBuf[quadFloats + 5] = g;
+		quadBuf[quadFloats + 6] = b;
+		quadBuf[quadFloats + 7] = a;
+		quadFloats += 8;
+	}
+
+	private void drawQuadBufferBatched(GuiGraphics graphics) {
+		if (quadFloats == 0) return;
+		Matrix4f pose = graphics.pose().last().pose();
+		Tesselator tesselator = Tesselator.getInstance();
+		BufferBuilder buffer = tesselator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR);
+
+		for (int i = 0; i < quadFloats; i += 8) {
+			float x1 = quadBuf[i], y1 = quadBuf[i + 1], x2 = quadBuf[i + 2], y2 = quadBuf[i + 3];
+			float r = quadBuf[i + 4], g = quadBuf[i + 5], b = quadBuf[i + 6], a = quadBuf[i + 7];
+			buffer.addVertex(pose, x1, y1, 0).setColor(r, g, b, a);
+			buffer.addVertex(pose, x2, y1, 0).setColor(r, g, b, a);
+			buffer.addVertex(pose, x2, y2, 0).setColor(r, g, b, a);
+			buffer.addVertex(pose, x1, y2, 0).setColor(r, g, b, a);
+		}
+
+		RenderSystem.setShader(net.minecraft.client.renderer.CoreShaders.POSITION_COLOR);
+		RenderSystem.enableBlend();
+		RenderSystem.defaultBlendFunc();
+		RenderSystem.disableDepthTest();
+		BufferUploader.drawWithShader(buffer.buildOrThrow());
+		RenderSystem.enableDepthTest();
+		RenderSystem.disableBlend();
 	}
 
 	private void drawWaypointsOnMap(GuiGraphics graphics, int mapAreaW) {
@@ -199,36 +279,6 @@ public class MapScreen extends Screen {
 		if (sx < 0 || sy < 0 || sx > mapAreaW || sy > this.height) return;
 		graphics.fill((int) sx - 3, (int) sy - 3, (int) sx + 3, (int) sy + 3, 0xFFFFFFFF);
 		graphics.fill((int) sx - 2, (int) sy - 2, (int) sx + 2, (int) sy + 2, 0xFFFF5555);
-	}
-
-	private static void addQuad(List<float[]> quads, float x1, float y1, float x2, float y2, int argb) {
-		float a = ((argb >>> 24) & 0xFF) / 255f;
-		float r = ((argb >>> 16) & 0xFF) / 255f;
-		float g = ((argb >>> 8) & 0xFF) / 255f;
-		float b = (argb & 0xFF) / 255f;
-		quads.add(new float[] {x1, y1, x2, y2, r, g, b, a});
-	}
-
-	private static void drawQuadsBatched(GuiGraphics graphics, List<float[]> quads) {
-		if (quads.isEmpty()) return;
-		Matrix4f pose = graphics.pose().last().pose();
-		Tesselator tesselator = Tesselator.getInstance();
-		BufferBuilder buffer = tesselator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR);
-
-		for (float[] q : quads) {
-			buffer.addVertex(pose, q[0], q[1], 0).setColor(q[4], q[5], q[6], q[7]);
-			buffer.addVertex(pose, q[2], q[1], 0).setColor(q[4], q[5], q[6], q[7]);
-			buffer.addVertex(pose, q[2], q[3], 0).setColor(q[4], q[5], q[6], q[7]);
-			buffer.addVertex(pose, q[0], q[3], 0).setColor(q[4], q[5], q[6], q[7]);
-		}
-
-		RenderSystem.setShader(net.minecraft.client.renderer.CoreShaders.POSITION_COLOR);
-		RenderSystem.enableBlend();
-		RenderSystem.defaultBlendFunc();
-		RenderSystem.disableDepthTest();
-		BufferUploader.drawWithShader(buffer.buildOrThrow());
-		RenderSystem.enableDepthTest();
-		RenderSystem.disableBlend();
 	}
 
 	@Override

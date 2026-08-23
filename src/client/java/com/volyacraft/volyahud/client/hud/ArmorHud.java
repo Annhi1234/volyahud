@@ -140,6 +140,29 @@ public class ArmorHud {
 	// Використовуємо інтерпольовану позицію гравця (partial tick), інакше
 	// мітка "відстає" від моделі й здається, що вона літає під час руху.
 	// ---------------------------------------------------------------
+	/**
+	 * БАГ-ФІКС ("літає навіть коли стоїш на місці"): сира проекція 3D->2D
+	 * щокадру дає координату, яка тремтить на 1-3px навіть у стані спокою —
+	 * через накопичення похибки float у матриці камери (перспективний поділ
+	 * дуже чутливий до найменших змін вхідних даних). Це непомітно для
+	 * ванільних елементів (вони не проходять через ручний перспективний
+	 * поділ), але для нашої мітки, яка перераховується "з нуля" щокадру,
+	 * це виглядає як дрібне сіпання/"політ". Рішення: не малювати сиру
+	 * координату напряму, а згладжувати її в часі (експоненційне згладжування
+	 * до попереднього кадру) окремо для кожного гравця — це прибирає
+	 * тремтіння, лишаючи рух плавним і майже без затримки.
+	 */
+	private static final java.util.Map<Integer, float[]> SMOOTHED_SCREEN_POS = new java.util.HashMap<>();
+	private static final float SMOOTHING = 0.45f; // менше = плавніше, але з більшою затримкою
+
+	// ОПТИМІЗАЦІЯ: раніше цей Set (потрібен лише для того, щоб в кінці кадру
+	// прибрати з SMOOTHED_SCREEN_POS записи гравців, яких у кадрі не було
+	// видно) виділявся заново на КОЖЕН виклик renderOthers — тобто щокадру,
+	// незалежно від того, скільки гравців навколо. Тепер один спільний Set
+	// перевикористовується між кадрами (просто очищується на початку) —
+	// прибирає постійний потік дрібних алокацій у гарячому 3D-проході.
+	private static final java.util.Set<Integer> SEEN_THIS_FRAME = new java.util.HashSet<>();
+
 	public static void renderOthers(WorldRenderContext context, Minecraft mc) {
 		if (mc.level == null || mc.player == null) return;
 		HudConfig cfg = HudConfig.INSTANCE;
@@ -148,6 +171,8 @@ public class ArmorHud {
 				.mul(context.matrixStack().last().pose());
 
 		float partialTick = context.tickCounter().getGameTimeDeltaPartialTick(true);
+		java.util.Set<Integer> seenThisFrame = SEEN_THIS_FRAME;
+		seenThisFrame.clear();
 
 		for (Player other : mc.level.players()) {
 			if (other == mc.player) continue;
@@ -185,13 +210,33 @@ public class ArmorHud {
 
 			int screenW = mc.getWindow().getGuiScaledWidth();
 			int screenH = mc.getWindow().getGuiScaledHeight();
-			int sx = (int) ((ndcX * 0.5 + 0.5) * screenW);
-			int sy = (int) ((1 - (ndcY * 0.5 + 0.5)) * screenH);
+			float rawX = (float) ((ndcX * 0.5 + 0.5) * screenW);
+			float rawY = (float) ((1 - (ndcY * 0.5 + 0.5)) * screenH);
 
-			if (sx < -60 || sx > screenW + 60 || sy < -60 || sy > screenH + 60) continue;
+			if (rawX < -60 || rawX > screenW + 60 || rawY < -60 || rawY > screenH + 60) continue;
 
-			OverlayQueue.queue(sx, sy, other, dist);
+			int id = other.getId();
+			seenThisFrame.add(id);
+			float[] smoothed = SMOOTHED_SCREEN_POS.get(id);
+			if (smoothed == null) {
+				// перша поява цього гравця в кадрі — одразу ставимо на реальну
+				// позицію, без згладжування "з нуля" (інакше мітка б "виїжджала"
+				// звідкись здалеку при появі гравця в полі зору).
+				smoothed = new float[] {rawX, rawY};
+				SMOOTHED_SCREEN_POS.put(id, smoothed);
+			} else {
+				smoothed[0] += (rawX - smoothed[0]) * SMOOTHING;
+				smoothed[1] += (rawY - smoothed[1]) * SMOOTHING;
+			}
+
+			OverlayQueue.queue(Math.round(smoothed[0]), Math.round(smoothed[1]), other, dist);
 		}
+
+		// прибираємо збережені позиції гравців, яких у цьому кадрі не було
+		// видно (вийшли з дистанції/зникли з очей) — інакше мапа росте
+		// безкінечно і старі дані можуть "воскреснути" застарілими, якщо
+		// гравець повернеться в кадр набагато пізніше.
+		SMOOTHED_SCREEN_POS.keySet().retainAll(seenThisFrame);
 	}
 
 	// Розмір комірки екіпіровки над головою іншого гравця. Навмисно менший за

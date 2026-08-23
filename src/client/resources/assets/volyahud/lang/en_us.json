@@ -5,5 +5,6 @@
   "key.volyahud.claim_chunk": "Claim/unclaim current chunk as territory",
   "key.volyahud.open_map": "Open full VolyaHUD map",
   "key.volyahud.toggle_hud": "Hide/show entire VolyaHUD",
+  "key.volyahud.quick_waypoint": "Quickly drop a map waypoint",
   "category.volyahud.general": "VolyaHUD"
 }

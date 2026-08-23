@@ -47,6 +47,14 @@ public class HudConfig {
 	public boolean targetBuffsHud = true;
 	public boolean inventoryPeek = true;
 	public boolean totemAlert = true;
+	/**
+	 * НОВА ФУНКЦІЯ: динамічне світло від предмета в руці. Якщо тримаєш
+	 * факел/ліхтар/лампу (будь-що, що як блок світиться) в основній АБО
+	 * в другорядній руці — навколо тебе стає видно так само, ніби ти цей
+	 * предмет поставив на землю. Тотем безсмертя поставити не можна, тому
+	 * для нього зроблено виняток: він світить як звичайний факел.
+	 */
+	public boolean heldItemDynamicLight = true;
 	/** Показувати відстань (у блоках) поруч з HP-міткою над іншими гравцями. */
 	public boolean healthTagDistance = true;
 	/** Дописувати в тултип зброї (наведення в інвентарі) розраховану реальну шкоду по HP: база + усі чари, що впливають на шкоду (Sharpness/Smite/BoA, а також кастомні чари модів на кшталт ExcellentEnchants) + окремо крит. */
@@ -154,9 +162,17 @@ public class HudConfig {
 	public int minimapOffsetY = 0;
 	/** Скільки пікселів мінімапи припадає на 1 блок світу (масштаб). 1 = дуже віддалено, 4-6 = близько. */
 	public int minimapZoom = 2;
+	/** Показувати стрілки-індикатори по краю мінімапи для міток, які зараз не влазять у видиму область. */
+	public boolean minimapWaypointArrows = true;
 
 	/** Позначки (мітки) на карті, окремо для кожного виміру — ключ так само, як у territoryChunks. */
 	public Map<String, List<Waypoint>> waypoints = new HashMap<>();
+
+	// --- таймер бою ---
+	/** Показувати в інфо-панелі, скільки секунд лишилось "бойового тегу" після останнього удару. */
+	public boolean combatTimer = true;
+	/** Тривалість (сек) бойового тегу після останнього отриманого удару або нашої атаки по гравцю. */
+	public int combatTimerSeconds = 15;
 
 	public static class Waypoint {
 		public String name;
@@ -229,6 +245,9 @@ public class HudConfig {
 		// 0 сам по собі ще не призвів би до накладання (рендер підстраховується
 		// мінімумом 1px нижче), але це зламало б задуманий вигляд за замовчуванням.
 		if (otherHpEquipmentGap <= 0) otherHpEquipmentGap = 3;
+		// Той самий клас бага для нового поля: у старому конфігу, збереженому
+		// до появи таймера бою, Gson підставить "сирий" 0 замість дефолтних 15с.
+		if (combatTimerSeconds <= 0) combatTimerSeconds = 15;
 		if (territoryChunks == null) territoryChunks = new HashMap<>();
 		if (waypoints == null) waypoints = new HashMap<>();
 		// На випадок пошкодженого/частково записаного файлу — прибираємо

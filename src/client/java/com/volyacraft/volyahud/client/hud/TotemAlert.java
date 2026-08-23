@@ -45,7 +45,16 @@ public class TotemAlert {
 		int screenH = graphics.guiHeight();
 		int totalH = ACTIVE.size() * 14;
 
-		int centerX = HudStyle.clampX(screenW / 2 + cfg.totemAlertOffsetX, 0, screenW);
+		// БАГ-ФІКС: раніше кламп по X рахувався так, ніби ширина банера — 0px
+		// (не враховував реальний текст), тому найширші сповіщення все одно
+		// могли вилізти за край екрана при зсуві ближче до краю. Тепер беремо
+		// найширший з активних рядків, як для решти панелей.
+		int maxWidth = 0;
+		for (Alert alert : ACTIVE) {
+			maxWidth = Math.max(maxWidth, mc.font.width(alert.text()));
+		}
+
+		int centerX = HudStyle.clampX(screenW / 2 - maxWidth / 2 + cfg.totemAlertOffsetX, maxWidth, screenW) + maxWidth / 2;
 		int y = HudStyle.clampY(40 + cfg.totemAlertOffsetY, totalH, screenH);
 
 		for (Alert alert : ACTIVE) {

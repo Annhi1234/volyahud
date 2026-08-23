@@ -16,7 +16,6 @@ import net.minecraft.util.Mth;
 import net.minecraft.world.level.chunk.LevelChunk;
 import org.joml.Matrix4f;
 
-import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -42,10 +41,35 @@ public final class MinimapHud {
 	private MinimapHud() {
 	}
 
+	/**
+	 * ОПТИМІЗАЦІЯ (головне джерело лагів мінімапи): раніше {@code drawTerrain}
+	 * повністю перебудовував список квадів рельєфу (перебір усіх видимих
+	 * блоків + виділення нового {@code List<float[]>} з боксингом) на
+	 * КОЖНОМУ рендер-кадрі — тобто до сотень разів на секунду на моніторах
+	 * з високою частотою оновлення, хоча самі кольори рельєфу змінюються
+	 * набагато рідше. При великому розмірі мінімапи й малому зумі це були
+	 * сотні тисяч ітерацій та алокацій щосекунди — саме це відчувалось як
+	 * "лаги з мінімапою".
+	 * <p>
+	 * Тепер перебудова прив'язана до ігрового тіку (максимум ~20 разів на
+	 * секунду, а не до частоти кадрів): {@link #tick(Minecraft)} лише
+	 * виставляє прапорець "потрібна перебудова", а сам рендер повторно
+	 * використовує вже готовий буфер, поки прапорець не піднято. Затримка
+	 * в один тік (~50мс) на мінімапі непомітна оку, а виграш у продуктивності —
+	 * величезний, особливо при vsync=off/високій частоті монітора.
+	 */
+	private static boolean terrainDirty = true;
+
 	/** Раз на CAPTURE_INTERVAL_TICKS сканує чанки навколо гравця й оновлює їхні кольори в кеші. */
 	public static void tick(Minecraft mc) {
 		HudConfig cfg = HudConfig.INSTANCE;
 		if (!cfg.minimap || mc.player == null || mc.level == null) return;
+
+		// Гравець (найімовірніше) зрушив із місця за цей тік — рельєф мінімапи
+		// потребує перерахунку, але не частіше одного разу на тік (див. коментар
+		// до поля terrainDirty вище).
+		terrainDirty = true;
+
 		if (captureCooldown-- > 0) return;
 		captureCooldown = CAPTURE_INTERVAL_TICKS;
 
@@ -91,6 +115,14 @@ public final class MinimapHud {
 			graphics.fill(x, y, x + size, y + size, 0xFF060606);
 		} else {
 			drawTerrain(graphics, mc, cfg, x, y, size);
+		}
+		// НОВА ФУНКЦІЯ: стрілки-індикатори по краю мінімапи для міток, які
+		// зараз фізично не влазять у видиму область (замало наближення/задалеко) —
+		// показуємо в якому напрямку йти, навіть якщо сама мітка не видно.
+		// Малюється всередині того самого scissor'а, що й рельєф вище, тому
+		// індикатор ніколи не "вилазить" за межі квадратної панелі мінімапи.
+		if (cfg.minimapWaypointArrows) {
+			drawOffscreenWaypointArrows(graphics, mc, cfg, x, y, size);
 		}
 		graphics.disableScissor();
 
@@ -146,13 +178,64 @@ public final class MinimapHud {
 		RenderSystem.disableBlend();
 	}
 
+	// --- кеш перебудованого буфера квадів рельєфу (див. коментар до terrainDirty) ---
+	// Примітивний float[] замість List<float[]> — так само уникаємо боксингу й
+	// повторних алокацій тисяч маленьких масивів: буфер лише переростає (ніколи
+	// не зменшується) і повторно використовується між перебудовами.
+	private static float[] quadBuf = new float[64 * 8];
+	private static int quadFloats = 0; // скільки float зараз реально використано в quadBuf
+
+	private static int cachedX = Integer.MIN_VALUE, cachedY = Integer.MIN_VALUE;
+	private static int cachedSize = -1, cachedPxPerBlock = -1;
+	private static String cachedDim = null;
+
 	private static void drawTerrain(GuiGraphics graphics, Minecraft mc, HudConfig cfg, int x, int y, int size) {
 		int pxPerBlock = Mth.clamp(cfg.minimapZoom, 1, 6);
-		int blocksHalf = Math.max(8, size / (2 * pxPerBlock));
+		String dim = mc.level.dimension().location().toString();
 
+		// Перебудовуємо важкий буфер квадів лише якщо гравець зрушив цього тіку
+		// (terrainDirty) АБО помітно змінились параметри самої панелі (розмір
+		// вікна, зум, кут/зсув мінімапи, вимір) — інакше просто перевикористовуємо
+		// вже готовий буфер із минулого разу.
+		boolean paramsChanged = x != cachedX || y != cachedY || size != cachedSize
+				|| pxPerBlock != cachedPxPerBlock || !dim.equals(cachedDim);
+		if (terrainDirty || paramsChanged) {
+			rebuildTerrainBuffer(mc, x, y, size, pxPerBlock, dim);
+			terrainDirty = false;
+			cachedX = x; cachedY = y; cachedSize = size; cachedPxPerBlock = pxPerBlock; cachedDim = dim;
+		}
+
+		// нерозвідана територія (ще не захоплена в кеш) лишається просто фоном панелі —
+		// нічого не малюємо поверх, тому там видно темний фон панелі.
+		drawQuadBuffer(graphics);
+
+		// Мітки гравця малюються окремо, щокадру (це лише кілька дешевих fill(),
+		// а не перебір тисяч блоків) — тому завжди на актуальній позиції гравця,
+		// навіть у ті кадри, коли рельєф ще не перебудовувався цього тіку.
 		double px = mc.player.getX();
 		double pz = mc.player.getZ();
-		String dim = mc.level.dimension().location().toString();
+		int blocksHalf = Math.max(8, size / (2 * pxPerBlock));
+		float centerX = x + size / 2f;
+		float centerY = y + size / 2f;
+		for (HudConfig.Waypoint wp : cfg.waypointsFor(dim)) {
+			double dx = wp.x - px;
+			double dz = wp.z - pz;
+			if (Math.abs(dx) > blocksHalf || Math.abs(dz) > blocksHalf) continue;
+			int mx = Math.round(centerX + (float) (dx * pxPerBlock));
+			int mz = Math.round(centerY + (float) (dz * pxPerBlock));
+			int color = 0xFF000000 | wp.color;
+			graphics.fill(mx - 1, mz - 3, mx + 1, mz + 3, color);
+			graphics.fill(mx - 3, mz - 1, mx + 3, mz + 1, color);
+		}
+	}
+
+	/** Важка частина: перебір видимих блоків і заповнення {@link #quadBuf} — викликається щонайбільше раз на тік. */
+	private static void rebuildTerrainBuffer(Minecraft mc, int x, int y, int size, int pxPerBlock, String dim) {
+		quadFloats = 0;
+
+		int blocksHalf = Math.max(8, size / (2 * pxPerBlock));
+		double px = mc.player.getX();
+		double pz = mc.player.getZ();
 
 		int cx0 = (Mth.floor(px) - blocksHalf - 16) >> 4;
 		int cx1 = (Mth.floor(px) + blocksHalf + 16) >> 4;
@@ -162,7 +245,6 @@ public final class MinimapHud {
 		float centerX = x + size / 2f;
 		float centerY = y + size / 2f;
 
-		List<float[]> quads = new ArrayList<>();
 		for (int cx = cx0; cx <= cx1; cx++) {
 			for (int cz = cz0; cz <= cz1; cz++) {
 				int[] colors = ChunkColorCache.getOrNull(dim, cx, cz);
@@ -180,56 +262,53 @@ public final class MinimapHud {
 						int argb = colors[lz * 16 + lx];
 						float sx = centerX + (float) (dx * pxPerBlock);
 						float sy = centerY + (float) (dz * pxPerBlock);
-						addQuad(quads, sx, sy, sx + pxPerBlock, sy + pxPerBlock, argb);
+						pushQuad(sx, sy, sx + pxPerBlock, sy + pxPerBlock, argb);
 					}
 				}
 			}
 		}
+	}
 
-		// нерозвідана територія (ще не захоплена в кеш) лишається просто фоном панелі —
-		// нічого не малюємо поверх, тому там видно темний фон панелі.
-		drawQuads(graphics, quads);
-
-		// мітки гравця, видимі в межах поточного вікна мінімапи
-		for (HudConfig.Waypoint wp : cfg.waypointsFor(dim)) {
-			double dx = wp.x - px;
-			double dz = wp.z - pz;
-			if (Math.abs(dx) > blocksHalf || Math.abs(dz) > blocksHalf) continue;
-			int mx = Math.round(centerX + (float) (dx * pxPerBlock));
-			int mz = Math.round(centerY + (float) (dz * pxPerBlock));
-			int color = 0xFF000000 | wp.color;
-			graphics.fill(mx - 1, mz - 3, mx + 1, mz + 3, color);
-			graphics.fill(mx - 3, mz - 1, mx + 3, mz + 1, color);
+	private static void ensureQuadCapacity(int neededFloats) {
+		if (quadBuf.length < neededFloats) {
+			int newLen = quadBuf.length;
+			while (newLen < neededFloats) newLen *= 2;
+			quadBuf = java.util.Arrays.copyOf(quadBuf, newLen);
 		}
 	}
 
-	private static void addQuad(List<float[]> quads, float x1, float y1, float x2, float y2, int argb) {
+	private static void pushQuad(float x1, float y1, float x2, float y2, int argb) {
+		ensureQuadCapacity(quadFloats + 8);
 		float a = ((argb >>> 24) & 0xFF) / 255f;
 		float r = ((argb >>> 16) & 0xFF) / 255f;
 		float g = ((argb >>> 8) & 0xFF) / 255f;
 		float b = (argb & 0xFF) / 255f;
-		quads.add(new float[] {x1, y1, x2, y2, r, g, b, a});
+		quadBuf[quadFloats] = x1;
+		quadBuf[quadFloats + 1] = y1;
+		quadBuf[quadFloats + 2] = x2;
+		quadBuf[quadFloats + 3] = y2;
+		quadBuf[quadFloats + 4] = r;
+		quadBuf[quadFloats + 5] = g;
+		quadBuf[quadFloats + 6] = b;
+		quadBuf[quadFloats + 7] = a;
+		quadFloats += 8;
 	}
 
-	/**
-	 * Малює всі квадратики рельєфу ОДНИМ draw call'ом (батчинг через
-	 * Tesselator, той самий прийом, що вже використовується в
-	 * TerritoryBorder/ChunkGridOverlay), а не окремим graphics.fill() на
-	 * кожен блок — інакше мінімапа з високою деталізацією могла б суттєво
-	 * просісти по продуктивності (сотні-тисячі окремих draw call'ів на кадр).
-	 */
-	private static void drawQuads(GuiGraphics graphics, List<float[]> quads) {
-		if (quads.isEmpty()) return;
+	/** Малює закешований буфер квадів рельєфу одним draw call'ом (той самий прийом, що й раніше — лише без per-frame перебудови). */
+	private static void drawQuadBuffer(GuiGraphics graphics) {
+		if (quadFloats == 0) return;
 
 		Matrix4f pose = graphics.pose().last().pose();
 		Tesselator tesselator = Tesselator.getInstance();
 		BufferBuilder buffer = tesselator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR);
 
-		for (float[] q : quads) {
-			buffer.addVertex(pose, q[0], q[1], 0).setColor(q[4], q[5], q[6], q[7]);
-			buffer.addVertex(pose, q[2], q[1], 0).setColor(q[4], q[5], q[6], q[7]);
-			buffer.addVertex(pose, q[2], q[3], 0).setColor(q[4], q[5], q[6], q[7]);
-			buffer.addVertex(pose, q[0], q[3], 0).setColor(q[4], q[5], q[6], q[7]);
+		for (int i = 0; i < quadFloats; i += 8) {
+			float x1 = quadBuf[i], y1 = quadBuf[i + 1], x2 = quadBuf[i + 2], y2 = quadBuf[i + 3];
+			float r = quadBuf[i + 4], g = quadBuf[i + 5], b = quadBuf[i + 6], a = quadBuf[i + 7];
+			buffer.addVertex(pose, x1, y1, 0).setColor(r, g, b, a);
+			buffer.addVertex(pose, x2, y1, 0).setColor(r, g, b, a);
+			buffer.addVertex(pose, x2, y2, 0).setColor(r, g, b, a);
+			buffer.addVertex(pose, x1, y2, 0).setColor(r, g, b, a);
 		}
 
 		RenderSystem.setShader(CoreShaders.POSITION_COLOR);
@@ -240,4 +319,75 @@ public final class MinimapHud {
 		RenderSystem.enableDepthTest();
 		RenderSystem.disableBlend();
 	}
+
+	/**
+	 * Для кожної мітки поточного виміру, яка зараз ЗА межами видимого вікна
+	 * мінімапи (за той самий blocksHalf, що й у drawTerrain — тому "видно
+	 * напряму" тут і там рахується однаково), малює маленький трикутник на
+	 * краю квадратної панелі в бік мітки, той самий прийом (Tesselator +
+	 * TRIANGLES), що вже перевірений у drawFacingArrow вище.
+	 */
+	private static void drawOffscreenWaypointArrows(GuiGraphics graphics, Minecraft mc, HudConfig cfg, int x, int y, int size) {
+		String dim = mc.level.dimension().location().toString();
+		List<HudConfig.Waypoint> list = cfg.waypointsFor(dim);
+		if (list.isEmpty()) return;
+
+		int pxPerBlock = Mth.clamp(cfg.minimapZoom, 1, 6);
+		int blocksHalf = Math.max(8, size / (2 * pxPerBlock));
+
+		double px = mc.player.getX();
+		double pz = mc.player.getZ();
+		float centerX = x + size / 2f;
+		float centerY = y + size / 2f;
+		float edge = size / 2f - 6;
+
+		for (HudConfig.Waypoint wp : list) {
+			double dx = wp.x - px;
+			double dz = wp.z - pz;
+			if (Math.abs(dx) <= blocksHalf && Math.abs(dz) <= blocksHalf) continue; // вже видно напряму на рельєфі
+
+			double dist = Math.sqrt(dx * dx + dz * dz);
+			if (dist < 0.001) continue;
+			double dirX = dx / dist;
+			double dirZ = dz / dist;
+
+			float ix = centerX + (float) (dirX * edge);
+			float iy = centerY + (float) (dirZ * edge);
+			drawArrowIndicator(graphics, ix, iy, dirX, dirZ, 0xFF000000 | wp.color);
+		}
+	}
+
+	/** Трикутник-стрілка довільного кольору в довільній точці — той самий прийом, що й drawFacingArrow, але без прив'язки до погляду гравця. */
+	private static void drawArrowIndicator(GuiGraphics graphics, float cx, float cy, double dirX, double dirZ, int argbColor) {
+		double perpX = -dirZ;
+		double perpZ = dirX;
+
+		float tipX = cx + (float) (dirX * 5);
+		float tipY = cy + (float) (dirZ * 5);
+		float leftX = cx - (float) (dirX * 3) + (float) (perpX * 3.5);
+		float leftY = cy - (float) (dirZ * 3) + (float) (perpZ * 3.5);
+		float rightX = cx - (float) (dirX * 3) - (float) (perpX * 3.5);
+		float rightY = cy - (float) (dirZ * 3) - (float) (perpZ * 3.5);
+
+		float a = ((argbColor >>> 24) & 0xFF) / 255f;
+		float r = ((argbColor >>> 16) & 0xFF) / 255f;
+		float g = ((argbColor >>> 8) & 0xFF) / 255f;
+		float b = (argbColor & 0xFF) / 255f;
+
+		Matrix4f pose = graphics.pose().last().pose();
+		Tesselator tesselator = Tesselator.getInstance();
+		BufferBuilder buffer = tesselator.begin(VertexFormat.Mode.TRIANGLES, DefaultVertexFormat.POSITION_COLOR);
+		buffer.addVertex(pose, tipX, tipY, 0).setColor(r, g, b, a);
+		buffer.addVertex(pose, leftX, leftY, 0).setColor(r, g, b, a);
+		buffer.addVertex(pose, rightX, rightY, 0).setColor(r, g, b, a);
+
+		RenderSystem.setShader(CoreShaders.POSITION_COLOR);
+		RenderSystem.enableBlend();
+		RenderSystem.defaultBlendFunc();
+		RenderSystem.disableDepthTest();
+		BufferUploader.drawWithShader(buffer.buildOrThrow());
+		RenderSystem.enableDepthTest();
+		RenderSystem.disableBlend();
+	}
+
 }

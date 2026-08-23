@@ -8,7 +8,9 @@ import com.volyacraft.volyahud.client.gui.MapScreen;
 import com.volyacraft.volyahud.client.hud.ArmorHud;
 import com.volyacraft.volyahud.client.hud.BuffHud;
 import com.volyacraft.volyahud.client.hud.ChunkGridOverlay;
+import com.volyacraft.volyahud.client.hud.CombatTimer;
 import com.volyacraft.volyahud.client.hud.DamageMeter;
+import com.volyacraft.volyahud.client.hud.DynamicLight;
 import com.volyacraft.volyahud.client.hud.FpsHud;
 import com.volyacraft.volyahud.client.hud.OverlayQueue;
 import com.volyacraft.volyahud.client.hud.PearlTrajectory;
@@ -77,6 +79,12 @@ public class VolyaHudClient implements ClientModInitializer {
 	private static KeyMapping claimChunkKey;
 	private static KeyMapping openMapKey;
 	private static KeyMapping toggleHudKey;
+	private static KeyMapping quickWaypointKey;
+
+	/** Та сама палітра кольорів міток, що й у MapScreen — щоб швидкі мітки з клавіші виглядали так само, як поставлені вручну на карті. */
+	private static final int[] WAYPOINT_COLORS = {
+			0xFFFFFF, 0xFF5555, 0x55FF55, 0x5599FF, 0xFFD700, 0xFF55FF, 0x55FFFF
+	};
 
 	/**
 	 * НОВА ФУНКЦІЯ: швидке приховування ВСЬОГО кастомного HUD одразу (для
@@ -146,6 +154,17 @@ public class VolyaHudClient implements ClientModInitializer {
 				"category.volyahud.general"
 		));
 
+		// НОВА ФУНКЦІЯ: N — миттєво поставити мітку на карту прямо там, де
+		// зараз стоїш, без відкриття повної карти. Назву можна змінити пізніше
+		// в меню карти (M) — тут головне швидкість, щоб не втрачати позицію,
+		// поки біжиш кудись у бою чи досліджуєш територію.
+		quickWaypointKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
+				"key.volyahud.quick_waypoint",
+				InputConstants.Type.KEYSYM,
+				GLFW.GLFW_KEY_N,
+				"category.volyahud.general"
+		));
+
 		// Головний малюнок 2D HUD (броня, PvP-радар, бафи цілі).
 		HudRenderCallback.EVENT.register((graphics, tickDelta) -> {
 			Minecraft mc = Minecraft.getInstance();
@@ -172,7 +191,7 @@ public class VolyaHudClient implements ClientModInitializer {
 			if (cfg.totemAlert) {
 				safe("Сповіщення про тотем", () -> TotemAlert.render(graphics, mc));
 			}
-			if (cfg.showFps || cfg.showCoordX || cfg.showCoordY || cfg.showCoordZ || cfg.showChunkCoords || cfg.showCompass) {
+			if (cfg.showFps || cfg.showCoordX || cfg.showCoordY || cfg.showCoordZ || cfg.showChunkCoords || cfg.showCompass || cfg.combatTimer) {
 				safe("Інфо-панель", () -> FpsHud.render(graphics, mc));
 			}
 			if (cfg.damageMeter) {
@@ -257,11 +276,35 @@ public class VolyaHudClient implements ClientModInitializer {
 							hudHidden ? "§7VolyaHUD: §cприховано" : "§7VolyaHUD: §aпоказано"), true);
 				}
 			}
+			while (quickWaypointKey.consumeClick()) {
+				if (!noScreen) continue;
+				if (mc.player != null && mc.level != null) {
+					HudConfig cfg = HudConfig.INSTANCE;
+					String dim = mc.level.dimension().location().toString();
+					java.util.List<HudConfig.Waypoint> list = cfg.waypointsFor(dim);
+					int color = WAYPOINT_COLORS[list.size() % WAYPOINT_COLORS.length];
+					String name = "Мітка " + (list.size() + 1);
+					list.add(new HudConfig.Waypoint(name,
+							Mth.floor(mc.player.getX()), Mth.floor(mc.player.getY()), Mth.floor(mc.player.getZ()),
+							color));
+					cfg.save();
+					mc.player.displayClientMessage(Component.literal(
+							"§a\u2691 Мітку \"" + name + "\" додано на карту. Перейменувати можна в меню карти (M)."), true);
+				}
+			}
 			safe("Тік траєкторії кидка", () -> PearlTrajectory.tick(mc));
+			if (HudConfig.INSTANCE.combatTimer) {
+				safe("Тік таймера бою", () -> CombatTimer.tick(mc));
+			}
 			if (HudConfig.INSTANCE.totemAlert) {
 				safe("Тік сповіщення про тотем", () -> TotemAlert.tick(mc));
 			}
 			safe("Тік мінімапи", () -> MinimapHud.tick(mc));
+			// НОВА ФУНКЦІЯ: динамічне світло від факела/ліхтаря/тотема в руці.
+			// Тік виконується завжди (а не лише коли тумблер увімкнений), бо
+			// саме тут же й ховається логіка "прибрати фейковий блок назад",
+			// якщо тумблер вимкнули просто посеред гри.
+			safe("Динамічне світло від предмета в руці", () -> DynamicLight.tick(mc));
 			if (HudConfig.INSTANCE.damageMeter) {
 				safe("Тік реальної шкоди", () -> DamageMeter.tick(mc));
 			}
@@ -282,8 +325,18 @@ public class VolyaHudClient implements ClientModInitializer {
 		ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
 			ChunkColorCache.loadWorld(currentWorldKey(client));
 			FAILED.clear(); // даємо елементам, які раніше зламались, новий шанс на новому заході в гру
+			// Старий ClientLevel більше не існує — скидаємо стан динамічного
+			// світла без спроби повернути блок у ньому (і так уже нема куди).
+			DynamicLight.reset();
 		});
-		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> ChunkColorCache.saveWorld());
+		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
+			// Тут (на відміну від періодичного автозбереження на тіку) навмисно
+			// СИНХРОННА версія: гравець уже виходить зі світу, тож коротка пауза
+			// непомітна, а нам критично важливо, щоб файл дописався ДО того, як
+			// зникне рівень/сесія (фоновий потік міг би просто не встигнути).
+			ChunkColorCache.saveWorldBlocking();
+			DynamicLight.reset();
+		});
 	}
 
 	private static int mapAutosaveTimer = 0;
