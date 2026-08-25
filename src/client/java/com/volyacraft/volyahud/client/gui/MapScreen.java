@@ -87,10 +87,16 @@ public class MapScreen extends Screen {
 			EditBox box = new EditBox(this.font, sideX, y, sidebarWidth - 22, 18, Component.literal("назва мітки"));
 			box.setValue(wp.name);
 			box.setMaxLength(32);
-			box.setResponder(newName -> {
-				wp.name = newName;
-				cfg.save();
-			});
+			// ФІКС ЛАГІВ: раніше тут викликався cfg.save() на КОЖНУ літеру під
+			// час набору назви мітки (EditBox#setResponder спрацьовує щосимволу
+			// вводу) — тобто перейменування мітки на 10 символів = 10 окремих
+			// синхронних записів JSON-файлу на диск поспіль, що відчувалось як
+			// дрібне зависання клавіатури просто під час друку. Сам об'єкт
+			// {@code wp} і так змінюється миттєво в пам'яті (мітка одразу
+			// показує нову назву), а на диск усе одно достатньо записати один
+			// раз — це вже й так відбувається в {@link #onClose()} при виході
+			// з карти.
+			box.setResponder(newName -> wp.name = newName);
 			this.addRenderableWidget(box);
 
 			Button delete = Button.builder(Component.literal("\u2715"), b -> {

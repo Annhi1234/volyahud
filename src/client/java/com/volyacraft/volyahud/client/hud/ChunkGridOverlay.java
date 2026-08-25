@@ -113,16 +113,21 @@ public class ChunkGridOverlay {
 			double z0 = pcz * 16.0, z1 = (pcz + 1) * 16.0;
 			double midX = (x0 + x1) / 2.0, midZ = (z0 + z1) / 2.0;
 
-			queueLabel(context, mc, new Vec3(x0, midY, midZ), "16 \u00D7 16");
-			queueLabel(context, mc, new Vec3(x1, midY, midZ), "16 \u00D7 16");
-			queueLabel(context, mc, new Vec3(midX, midY, z0), "16 \u00D7 16");
-			queueLabel(context, mc, new Vec3(midX, midY, z1), "16 \u00D7 16");
+			// ОПТИМІЗАЦІЯ: view-projection матриця однакова для всіх 4 написів
+			// цього кадру — рахуємо її один раз тут, а не наново на кожен виклик
+			// queueLabel (раніше це було 4 однакових множення матриць щокадру
+			// замість одного).
+			Matrix4f viewProj = new Matrix4f(context.projectionMatrix())
+					.mul(context.matrixStack().last().pose());
+
+			queueLabel(context, mc, viewProj, new Vec3(x0, midY, midZ), "16 \u00D7 16");
+			queueLabel(context, mc, viewProj, new Vec3(x1, midY, midZ), "16 \u00D7 16");
+			queueLabel(context, mc, viewProj, new Vec3(midX, midY, z0), "16 \u00D7 16");
+			queueLabel(context, mc, viewProj, new Vec3(midX, midY, z1), "16 \u00D7 16");
 		}
 	}
 
-	private static void queueLabel(WorldRenderContext context, Minecraft mc, Vec3 worldPos, String text) {
-		Matrix4f viewProj = new Matrix4f(context.projectionMatrix())
-				.mul(context.matrixStack().last().pose());
+	private static void queueLabel(WorldRenderContext context, Minecraft mc, Matrix4f viewProj, Vec3 worldPos, String text) {
 		Vec3 camPos = context.camera().getPosition();
 
 		double wx = worldPos.x - camPos.x;

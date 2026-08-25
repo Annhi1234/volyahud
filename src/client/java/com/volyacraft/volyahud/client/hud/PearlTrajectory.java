@@ -16,6 +16,7 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.projectile.ThrownEnderpearl;
 import net.minecraft.world.entity.projectile.ThrownExperienceBottle;
 import net.minecraft.world.entity.projectile.ThrownPotion;
+import net.minecraft.util.Mth;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.phys.Vec3;
@@ -111,8 +112,10 @@ public class PearlTrajectory {
 		if (cfg.pearlTrajectory) {
 			Kind held = heldKind(mc);
 			if (held != null) {
-				List<Vec3> path = simulateThrow(mc, held, partialTick);
+				List<Vec3> path = getOrSimulate(mc, held, partialTick);
 				drawThickLine(pose, relativeTo(path, camPos), held.pr, held.pg, held.pb, 0.9f, PREVIEW_WIDTH);
+			} else {
+				cachedPreviewKind = null; // предмет прибрали з руки — старий кеш більше не актуальний
 			}
 		}
 
@@ -149,6 +152,64 @@ public class PearlTrajectory {
 	}
 
 	/**
+	 * ФІКС ПРОДУКТИВНОСТІ (головна знахідка в цьому файлі): поки гравець
+	 * тримає в руці перлу/зілля/пляшку, {@link #render} викликається на
+	 * КОЖЕН кадр — а важка симуляція нижче ({@link #simulateThrow}) робить
+	 * до 140 кроків фізики, і на кожному кроці ще й перевірку колізії блока
+	 * ({@link #hitsSolid}). Раніше це рахувалось заново щокадру НАВІТЬ КОЛИ
+	 * гравець просто стоїть і не рухає мишею: на моніторі з високою частотою
+	 * оновлення (240-360 Гц) — це десятки тисяч кроків фізики й колізійних
+	 * перевірок щосекунди без жодної користі, бо результат виходив ідентичний
+	 * кадр у кадр.
+	 * <p>
+	 * Тепер важка симуляція перераховується лише тоді, коли реально змінилось
+	 * хоч щось із того, від чого залежить траєкторія: позиція ока, кут
+	 * огляду або сам тип предмета в руці (з невеликим порогом, щоб не ловити
+	 * природне тремтіння значень з плаваючою комою). Додатково є примусове
+	 * оновлення раз на пів секунди — про всяк випадок, якщо світ навколо
+	 * змінився (хтось зламав/поставив блок точно на шляху лінії), поки
+	 * гравець сам стоїть нерухомо. Дешева частина — переведення вже готових
+	 * точок у координати відносно камери (relativeTo) — і так лишається
+	 * щокадру, бо сама камера трохи рухається навіть на місці (бобінг).
+	 */
+	private static Kind cachedPreviewKind;
+	private static double cachedEyeX, cachedEyeY, cachedEyeZ;
+	private static float cachedYaw, cachedPitch;
+	private static long cachedAtMs = 0L;
+	private static List<Vec3> cachedPreviewPoints = List.of();
+
+	private static final double EYE_MOVE_EPS_SQ = 0.0004; // ~2 см
+	private static final float ANGLE_EPS = 0.05f; // градуси
+	private static final long FORCE_REFRESH_MS = 500;
+
+	private static List<Vec3> getOrSimulate(Minecraft mc, Kind kind, float partialTick) {
+		Player player = mc.player;
+		Vec3 eye = player.getEyePosition(partialTick);
+		float yaw = player.getViewYRot(partialTick);
+		float pitch = player.getViewXRot(partialTick);
+		long now = System.currentTimeMillis();
+
+		double dx = eye.x - cachedEyeX, dy = eye.y - cachedEyeY, dz = eye.z - cachedEyeZ;
+		boolean eyeMoved = (dx * dx + dy * dy + dz * dz) > EYE_MOVE_EPS_SQ;
+		boolean aimMoved = Math.abs(Mth.wrapDegrees(yaw - cachedYaw)) > ANGLE_EPS
+				|| Math.abs(pitch - cachedPitch) > ANGLE_EPS;
+
+		if (kind == cachedPreviewKind && !eyeMoved && !aimMoved && (now - cachedAtMs) < FORCE_REFRESH_MS) {
+			return cachedPreviewPoints; // нічого важливого не змінилось — переюзаємо старий розрахунок
+		}
+
+		cachedPreviewPoints = simulateThrow(mc, kind, partialTick);
+		cachedPreviewKind = kind;
+		cachedEyeX = eye.x;
+		cachedEyeY = eye.y;
+		cachedEyeZ = eye.z;
+		cachedYaw = yaw;
+		cachedPitch = pitch;
+		cachedAtMs = now;
+		return cachedPreviewPoints;
+	}
+
+	/**
 	 * Симуляція фізики снаряда, максимально наближена до ванільної
 	 * (Projectile#shootFromRotation + Projectile#tick): стартова точка трохи
 	 * нижче ока гравця, напрямок з урахуванням зміщення тангажу (наприклад,
@@ -161,20 +222,35 @@ public class PearlTrajectory {
 	 * не збігалась із прицілом. Тепер беремо ту саму інтерпольовану позицію
 	 * ока та кут огляду (partial tick), що використовує рендер камери,
 	 * тому прев'ю завжди точно збігається з напрямком погляду.
+	 *
+	 * ОПТИМІЗАЦІЯ: сам цикл фізики раніше працював через незмінні {@code Vec3}
+	 * (кожен .add()/.scale()/.subtract() створює НОВИЙ об'єкт) — тобто по 3
+	 * зайві алокації на кожен з 140 кроків. Тепер швидкість рахується у
+	 * звичайних double-змінних, і Vec3 створюється лише один раз на крок —
+	 * саме для точки, яка й так потрібна для списку.
 	 */
 	private static List<Vec3> simulateThrow(Minecraft mc, Kind kind, float partialTick) {
-		List<Vec3> points = new ArrayList<>();
+		List<Vec3> points = new ArrayList<>(141);
 		Player player = mc.player;
 		Vec3 eye = player.getEyePosition(partialTick);
-		Vec3 pos = new Vec3(eye.x, eye.y - 0.1, eye.z);
-		Vec3 vel = shootDirection(player, partialTick, kind.pitchOffset).scale(kind.velocity);
+		double px = eye.x, py = eye.y - 0.1, pz = eye.z;
 
-		points.add(pos);
+		Vec3 dir = shootDirection(player, partialTick, kind.pitchOffset);
+		double vx = dir.x * kind.velocity;
+		double vy = dir.y * kind.velocity;
+		double vz = dir.z * kind.velocity;
+
+		points.add(new Vec3(px, py, pz));
 		for (int i = 0; i < 140; i++) {
-			pos = pos.add(vel);
-			vel = vel.scale(0.99).subtract(0, kind.gravity, 0);
-			points.add(pos);
-			if (hitsSolid(mc, pos)) {
+			px += vx;
+			py += vy;
+			pz += vz;
+			vx *= 0.99;
+			vy *= 0.99;
+			vz *= 0.99;
+			vy -= kind.gravity;
+			points.add(new Vec3(px, py, pz));
+			if (hitsSolid(mc, px, py, pz)) {
 				break;
 			}
 		}
@@ -187,8 +263,8 @@ public class PearlTrajectory {
 	 * тобто в блоках, крізь які снаряд насправді пролітає без перешкод.
 	 * Перевірка через форму колізії — набагато точніша.
 	 */
-	private static boolean hitsSolid(Minecraft mc, Vec3 pos) {
-		BlockPos blockPos = BlockPos.containing(pos);
+	private static boolean hitsSolid(Minecraft mc, double x, double y, double z) {
+		BlockPos blockPos = BlockPos.containing(x, y, z);
 		var state = mc.level.getBlockState(blockPos);
 		if (state.isAir()) return false;
 		return !state.getCollisionShape(mc.level, blockPos).isEmpty();
