@@ -328,6 +328,10 @@ public class VolyaHudClient implements ClientModInitializer {
 			// Старий ClientLevel більше не існує — скидаємо стан динамічного
 			// світла без спроби повернути блок у ньому (і так уже нема куди).
 			DynamicLight.reset();
+			// Приховування HUD — тимчасове, на одну сесію: після перезаходу в
+			// гру показуємо його знову, щоб гравець не лишився з порожнім
+			// екраном і не зрозумів, що мод зламався.
+			hudHidden = false;
 		});
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
 			// Тут (на відміну від періодичного автозбереження на тіку) навмисно

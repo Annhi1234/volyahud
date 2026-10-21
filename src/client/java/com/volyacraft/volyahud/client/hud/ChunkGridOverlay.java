@@ -117,8 +117,13 @@ public class ChunkGridOverlay {
 			// цього кадру — рахуємо її один раз тут, а не наново на кожен виклик
 			// queueLabel (раніше це було 4 однакових множення матриць щокадру
 			// замість одного).
+			// Повна матриця виду: ProjMat * поворот камери. positionMatrix() —
+			// це те, що ванільний рендер кладе в ModelViewMat під час малювання
+			// світу. matrixStack() — свіжий identity-стек, повороту камери в
+			// ньому немає, тому проєкція без нього давала б підписи не там, де
+			// треба (див. такий самий фікс в ArmorHud.renderOthers).
 			Matrix4f viewProj = new Matrix4f(context.projectionMatrix())
-					.mul(context.matrixStack().last().pose());
+					.mul(context.positionMatrix());
 
 			queueLabel(context, mc, viewProj, new Vec3(x0, midY, midZ), "16 \u00D7 16");
 			queueLabel(context, mc, viewProj, new Vec3(x1, midY, midZ), "16 \u00D7 16");

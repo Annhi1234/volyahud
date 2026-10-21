@@ -167,8 +167,18 @@ public class ArmorHud {
 		if (mc.level == null || mc.player == null) return;
 		HudConfig cfg = HudConfig.INSTANCE;
 
+		// ВАЖЛИВО: для проєкції світової точки на екран потрібна
+		// ПОВНА матриця виду: ProjMat * ModelViewMat, де ModelViewMat —
+		// це поворот камери (context.positionMatrix()).
+		//
+		// Раніше тут стояло context.matrixStack().last().pose() — але це
+		// СВІЖИЙ (identity) PoseStack, створений ванільним рендером для
+		// малювання сутностей; він НЕ містить повороту камери. Через це
+		// проєкція була без повороту — мітки гравців випадали з екрана або
+		// з'являлися в неправильному місці, залежно від того, куди ти
+		// повертаєш камеру.
 		Matrix4f viewProj = new Matrix4f(context.projectionMatrix())
-				.mul(context.matrixStack().last().pose());
+				.mul(context.positionMatrix());
 
 		float partialTick = context.tickCounter().getGameTimeDeltaPartialTick(true);
 		java.util.Set<Integer> seenThisFrame = SEEN_THIS_FRAME;

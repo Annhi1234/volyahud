@@ -13,26 +13,34 @@ import net.minecraft.util.Mth;
 
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
-import java.util.function.DoubleSupplier;
 import java.util.function.DoubleConsumer;
+import java.util.function.DoubleSupplier;
 import java.util.function.Supplier;
 
 /**
  * Меню налаштувань HUD у стилі Sodium: вкладки-категорії зверху, під ними
  * чіткий двоколонковий список опцій із підказками (наведи мишкою — побачиш
- * опис), і окрема вкладка не захаращує екран усіма ~20 опціями одразу.
+ * опис).
+ *
+ * <p><b>ГОЛОВНИЙ ФІКС ІНТЕРФЕЙСУ:</b> раніше список опцій просто малювався
+ * вниз від верхнього краю екрана, і все, що не вміщувалося, опинялося
+ * <i>за межами екрана</i> — при високому GUI Scale або на маленькому вікні
+ * половина опцій ставала недоступною (кнопки не натискались, підказки не
+ * показувались). Тепер список <b>прокручується</b>: колесо миші та кнопки
+ * "вгору"/"вниз" біля вкладок. Рядки, яких не видно, навіть не створюються
+ * — тож нічого не "з'їжджає" і нічого не перекривається.
  */
 public class ConfigScreen extends Screen {
 
 	private enum Tab {
 		ARMOR("Броня"),
 		PLAYERS("Гравці"),
-		THROWS("Кидки і радар"),
+		THROWS("Кидки"),
 		BUILD("Будівництво"),
 		MINIMAP("Мінімапа"),
-		INFO("Інфо-панель"),
+		INFO("Інфо"),
 		DAMAGE("Шкода"),
-		MISC("Чат і інше");
+		MISC("Інше");
 
 		final String title;
 
@@ -46,10 +54,17 @@ public class ConfigScreen extends Screen {
 	private static final int COL_GAP = 16;
 	private static final int TAB_HEIGHT = 22;
 	private static final int CONTENT_TOP = 54;
+	/** Скільки рядків опцій одночасно показувати на екрані. */
+	private static final int VISIBLE_ROWS = 7;
 
 	private final Screen parent;
 	private final HudConfig cfg = HudConfig.INSTANCE;
 	private Tab currentTab = Tab.ARMOR;
+
+	/** Зсув прокрутки (в рядках). 0 = верх списку. */
+	private int scroll = 0;
+	/** Скільки всього рядків у поточній вкладці. */
+	private int totalRows = 0;
 
 	public ConfigScreen(Screen parent) {
 		super(Component.literal("VolyaHUD — налаштування"));
@@ -58,22 +73,16 @@ public class ConfigScreen extends Screen {
 
 	@Override
 	protected void init() {
-		// БАГ-ФІКС: раніше ширина вкладок рахувалась як фіксовані 108px * 7
-		// вкладок (= 756px) незалежно від реального розміру вікна. При вищому
-		// GUI Scale (або вузькому вікні) guiScaledWidth легко буває меншим за
-		// 756 — вкладки просто вилазили за межі екрана й ставали недоступні
-		// для кліку/виглядали "криво збоку". Тепер ширина кожної вкладки
-		// підлаштовується під реальну ширину екрана.
 		int tabCount = Tab.values().length;
 		int tabGap = 2;
 		int maxTabsWidth = this.width - 16;
-		int tabWidth = Mth.clamp((maxTabsWidth - tabGap * (tabCount - 1)) / tabCount, 46, 106);
+		int tabWidth = Mth.clamp((maxTabsWidth - tabGap * (tabCount - 1)) / tabCount, 44, 104);
 		int totalTabsWidth = tabWidth * tabCount + tabGap * (tabCount - 1);
 		int tabX = this.width / 2 - totalTabsWidth / 2;
 		for (Tab tab : Tab.values()) {
 			boolean selected = tab == currentTab;
 			Button tabButton = Button.builder(
-					Component.literal((selected ? "\u25B8 " : "") + tab.title),
+					Component.literal((selected ? "▸ " : "") + tab.title),
 					b -> switchTab(tab)
 			).bounds(tabX, 26, tabWidth, TAB_HEIGHT).build();
 			tabButton.active = !selected;
@@ -81,246 +90,408 @@ public class ConfigScreen extends Screen {
 			tabX += tabWidth + tabGap;
 		}
 
-		// Захист від того самого класу бага й тут: не даємо колонкам піти
-		// за межі екрана на дуже вузьких вікнах/високому GUI Scale.
+		// Лічильники рядків для кожної колонки — щоб знати, скільки всього
+		// рядків (для прокрутки) і які рядки зараз видимі.
 		int col1X = Math.max(8, this.width / 2 - (COL_WIDTH * 2 + COL_GAP) / 2);
 		int col2X = col1X + COL_WIDTH + COL_GAP;
-		int y1 = CONTENT_TOP;
-		int y2 = CONTENT_TOP;
 
+		RowBuilder c1 = new RowBuilder(col1X);
+		RowBuilder c2 = new RowBuilder(col2X);
+
+		buildTab(c1, c2);
+
+		totalRows = Math.max(c1.count, c2.count);
+		clampScroll();
+
+		// Кнопки прокрутки — праворуч від вкладок.
+		int scrollBtnX = this.width - 24;
+		Button up = Button.builder(Component.literal("▲"), b -> scrollBy(-1))
+				.bounds(scrollBtnX, 26, 16, 10)
+				.tooltip(Tooltip.create(Component.literal("Прокрутити список опцій вгору")))
+				.build();
+		Button down = Button.builder(Component.literal("▼"), b -> scrollBy(1))
+				.bounds(scrollBtnX, 38, 16, 10)
+				.tooltip(Tooltip.create(Component.literal("Прокрутити список опцій вниз")))
+				.build();
+		this.addRenderableWidget(up);
+		this.addRenderableWidget(down);
+
+		// Кнопка "Готово" — завжди внизу екрана, незалежно від довжини списку.
+		this.addRenderableWidget(Button.builder(Component.literal("Готово"), b -> {
+			cfg.save();
+			Minecraft.getInstance().setScreen(parent);
+		}).bounds(this.width / 2 - 75, this.height - 26, 150, 20).build());
+	}
+
+	/**
+	 * Будує вміст вкладки. Кожна колонка — окремий {@link RowBuilder}, який
+	 * сам вирішує, чи створювати віджди для цього рядка (тобто чи він
+	 * потрапляє у видиму частину списку).
+	 */
+	private void buildTab(RowBuilder c1, RowBuilder c2) {
 		switch (currentTab) {
 			case ARMOR -> {
-				y1 = addToggle(col1X, y1, "Своя броня знизу",
-						"Показувати панель зі своєю бронею над хотбаром.",
+				c1.toggle("Своя броня", "Показувати панель зі своєю бронею.",
 						() -> cfg.ownArmorHud, v -> cfg.ownArmorHud = v);
-				y1 = addCycle(col1X, y1, "Розкладка", "Сітка 2x2 або один рядок з 4 слотів.",
+				c1.cycle("Розкладка", "Сітка 2x2 або один рядок з 4 слотів.",
 						() -> cfg.armorLayout.name(), () -> {
 							cfg.armorLayout = cfg.armorLayout == HudConfig.ArmorLayout.GRID
 									? HudConfig.ArmorLayout.LINE : HudConfig.ArmorLayout.GRID;
 						}, this::armorLayoutLabel);
-				y1 = addCycle(col1X, y1, "Кут екрана",
-						"У якому куті малювати свою броню.",
+				c1.cycle("Кут екрана", "У якому куті малювати свою броню.",
 						() -> cfg.armorCorner.name(), this::cycleArmorCorner, this::cornerLabel);
-				y1 = addToggle(col1X, y1, "Впритул до низу",
-						"Притиснути панель до самого краю екрана (може лягати на хотбар по краях), замість того щоб стояти над ним.",
+				c1.toggle("Впритул до низу", "Притиснути панель до самого краю екрана (може лягати на хотбар по краях).",
 						() -> cfg.armorFlushBottom, v -> cfg.armorFlushBottom = v);
-				y1 = addStepper(col1X, y1, "Зсув по X",
-						"Ручне зміщення панелі вбік — щоб розминутись із чатом чи іншим HUD.",
+				c1.stepper("Зсув по X", "Ручне зміщення панелі вбік — щоб розминутись із чатом чи іншим HUD.",
 						() -> cfg.armorOffsetX, v -> cfg.armorOffsetX = v, 4, -200, 200);
-				y1 = addStepper(col1X, y1, "Зсув по Y",
-						"Ручне зміщення панелі вгору/вниз. Мінус — вище, плюс — нижче.",
+				c1.stepper("Зсув по Y", "Ручне зміщення панелі вгору/вниз. Мінус — вище, плюс — нижче.",
 						() -> cfg.armorOffsetY, v -> cfg.armorOffsetY = v, 4, -200, 200);
 
-				y2 = addToggle(col2X, y2, "Броня інших гравців",
-						"Показувати іконки броні над головою гравців, на яких дивишся.",
+				c2.toggle("Броня інших гравців", "Показувати іконки броні над головою гравців, на яких дивишся.",
 						() -> cfg.otherPlayersArmorHud, v -> cfg.otherPlayersArmorHud = v);
-				y2 = addToggle(col2X, y2, "Показ екіпіровки цілі",
-						"Показувати, що тримає в руках гравець, на якого дивишся.",
+				c2.toggle("Показ екіпіровки цілі", "Показувати, що тримає в руках гравець, на якого дивишся.",
 						() -> cfg.inventoryPeek, v -> cfg.inventoryPeek = v);
-				y2 = addStepper(col2X, y2, "Зсув екіпіровки по Y",
-						"Ручне зміщення рядка екіпіровки (і зброї в руках) над головою противника відносно HP. Мінус — далі від HP, плюс — ближче. Не може накластися на HP: зазор нижче завжди підстраховує мінімум 1px.",
+				c2.stepper("Зсув екіпіровки по Y", "Зміщення рядка екіпіровки (і зброї) над головою противника відносно HP. Мінус — далі від HP, плюс — ближче. Не може накластися на HP: зазор завжди підстраховує мінімум 1px.",
 						() -> cfg.otherEquipmentOffsetY, v -> cfg.otherEquipmentOffsetY = v, 2, -60, 60);
-				y2 = addStepper(col2X, y2, "Зазор HP \u2194 екіпіровка",
-						"Бажаний проміжок (px) між рядком HP і рядком екіпіровки над головою противника (і так само між екіпіровкою й зброєю в руках).",
+				c2.stepper("Зазор HP ↔ екіпіровка", "Проміжок (px) між рядком HP і рядком екіпіровки (і так само між екіпіровкою й зброєю).",
 						() -> cfg.otherHpEquipmentGap, v -> cfg.otherHpEquipmentGap = v, 1, 1, 20);
 			}
 			case PLAYERS -> {
-				y1 = addToggle(col1X, y1, "HP-мітки над гравцями",
-						"Показувати здоров'я над головою інших гравців.",
+				c1.toggle("HP-мітки над гравцями", "Показувати здоров'я над головою інших гравців.",
 						() -> cfg.healthTags, v -> cfg.healthTags = v);
-				y1 = addSlider(col1X, y1, "Дистанція показу",
-						"Максимальна відстань (у блоках), на якій показуються мітки гравців.",
+				c1.slider("Дистанція показу", "Максимальна відстань (у блоках), на якій показуються мітки гравців.",
 						() -> cfg.otherPlayersRenderDistance, v -> cfg.otherPlayersRenderDistance = v, 8, 4, 128);
-				y1 = addToggle(col1X, y1, "Дистанція в HP-мітці",
-						"Показувати відстань у блоках поруч з HP гравця (наприклад \"18/20 \u2764 12m\").",
+				c1.toggle("Дистанція в HP-мітці", "Показувати відстань у блоках поруч з HP гравця.",
 						() -> cfg.healthTagDistance, v -> cfg.healthTagDistance = v);
-				y1 = addStepper(col1X, y1, "Зсув HP по Y",
-						"Ручне зміщення рядка HP над головою противника відносно ніка. Мінус — далі від ніка (вище), плюс — ближче. Рухає разом із собою й екіпіровку/зброю над ним, тому стос не розсипається.",
+				c1.stepper("Зсув HP по Y", "Зміщення рядка HP над головою противника відносно ніка. Рухає разом із собою й екіпіровку/зброю над ним, тому стос не розсипається.",
 						() -> cfg.otherHpOffsetY, v -> cfg.otherHpOffsetY = v, 2, -60, 60);
 
-				y2 = addToggle(col2X, y2, "Бафи цілі",
-						"Показувати активні ефекти гравця, на якого дивишся.",
+				c2.toggle("Бафи цілі", "Показувати активні ефекти гравця, на якого дивишся.",
 						() -> cfg.targetBuffsHud, v -> cfg.targetBuffsHud = v);
-				y2 = addCycle(col2X, y2, "Кут екрана",
-						"У якому куті малювати панель бафів цілі.",
+				c2.cycle("Кут екрана", "У якому куті малювати панель бафів цілі.",
 						() -> cfg.targetBuffsCorner.name(), this::cycleTargetBuffsCorner, this::cornerLabel);
-				y2 = addStepper(col2X, y2, "Зсув по X",
-						"Ручне зміщення панелі бафів вбік.",
+				c2.stepper("Зсув по X", "Ручне зміщення панелі бафів вбік.",
 						() -> cfg.targetBuffsOffsetX, v -> cfg.targetBuffsOffsetX = v, 4, -300, 300);
-				y2 = addStepper(col2X, y2, "Зсув по Y",
-						"Ручне зміщення панелі бафів вгору/вниз.",
+				c2.stepper("Зсув по Y", "Ручне зміщення панелі бафів вгору/вниз.",
 						() -> cfg.targetBuffsOffsetY, v -> cfg.targetBuffsOffsetY = v, 4, -300, 300);
-				y2 = addToggle(col2X, y2, "Сповіщення про тотем",
-						"Текстове сповіщення, коли поруч хтось використав тотем безсмертя.",
+				c2.toggle("Сповіщення про тотем", "Текстове сповіщення, коли поруч хтось використав тотем безсмертя.",
 						() -> cfg.totemAlert, v -> cfg.totemAlert = v);
-				y2 = addStepper(col2X, y2, "Зсув сповіщень по X",
-						"Ручне зміщення банера сповіщень про тотем вбік від центру.",
+				c2.stepper("Зсув сповіщень по X", "Зміщення банера сповіщень про тотем вбік від центру.",
 						() -> cfg.totemAlertOffsetX, v -> cfg.totemAlertOffsetX = v, 4, -300, 300);
-				y2 = addStepper(col2X, y2, "Зсув сповіщень по Y",
-						"Ручне зміщення банера сповіщень про тотем вгору/вниз.",
+				c2.stepper("Зсув сповіщень по Y", "Зміщення банера сповіщень про тотем вгору/вниз.",
 						() -> cfg.totemAlertOffsetY, v -> cfg.totemAlertOffsetY = v, 4, -300, 300);
 			}
 			case THROWS -> {
-				y1 = addToggle(col1X, y1, "Прев'ю траєкторії кидка",
-						"Лінія напрямку, поки тримаєш перлу/зілля/пляшку досвіду в руці.",
+				c1.toggle("Прев'ю траєкторії", "Лінія напрямку, поки тримаєш перлу/зілля/пляшку досвіду в руці.",
 						() -> cfg.pearlTrajectory, v -> cfg.pearlTrajectory = v);
-				y1 = addToggle(col1X, y1, "Слід кинутого предмета",
-						"Лінія за вже кинутою перлою/зіллям/пляшкою досвіду в польоті.",
+				c1.toggle("Слід кинутого предмета", "Лінія за вже кинутою перлою/зіллям/пляшкою в польоті.",
 						() -> cfg.pearlTrail, v -> cfg.pearlTrail = v);
 
-				y2 = addToggle(col2X, y2, "Індикатор гравців над хотбаром",
-						"Горизонтальна шкала, що показує, з якого боку поруч знаходяться гравці.",
+				c2.toggle("Індикатор гравців", "Горизонтальна шкала, що показує, з якого боку поруч знаходяться гравці.",
 						() -> cfg.pvpRadar, v -> cfg.pvpRadar = v);
-				y2 = addSlider(col2X, y2, "Радіус радара",
-						"Відстань (у блоках), на якій гравці з'являються на індикаторі.",
+				c2.slider("Радіус радара", "Відстань (у блоках), на якій гравці з'являються на індикаторі.",
 						() -> cfg.pvpRadarActivationDistance, v -> cfg.pvpRadarActivationDistance = v, 4, 4, 64);
-				y2 = addStepper(col2X, y2, "Зсув по X",
-						"Ручне зміщення шкали радара вбік від центру.",
+				c2.stepper("Зсув по X", "Зміщення шкали радара вбік від центру.",
 						() -> cfg.pvpRadarOffsetX, v -> cfg.pvpRadarOffsetX = v, 4, -300, 300);
-				y2 = addStepper(col2X, y2, "Зсув по Y",
-						"Ручне зміщення шкали радара вгору/вниз.",
+				c2.stepper("Зсув по Y", "Зміщення шкали радара вгору/вниз.",
 						() -> cfg.pvpRadarOffsetY, v -> cfg.pvpRadarOffsetY = v, 4, -300, 300);
 			}
 			case BUILD -> {
-				y1 = addToggle(col1X, y1, "Сітка чанка",
-						"Малює тонкі лінії на кожній межі чанка (кожні 16 блоків) навколо тебе — зручно для рівної забудови. Клавіша за замовчуванням: G.",
+				c1.toggle("Сітка чанка", "Тонкі лінії на кожній межі чанка (кожні 16 блоків) навколо тебе — зручно для рівної забудови. Клавіша: G.",
 						() -> cfg.chunkGrid, v -> cfg.chunkGrid = v);
-				y1 = addToggle(col1X, y1, "Підпис \"16 x 16\"",
-						"Показує підпис на стінах чанка, у якому ти зараз стоїш.",
+				c1.toggle("Підпис \"16 x 16\"", "Показує підпис на стінах чанка, у якому ти зараз стоїш.",
 						() -> cfg.chunkGridLabels, v -> cfg.chunkGridLabels = v);
+				c1.button("Скинути налаштування", "Повертає ВСІ опції HUD до стандартних. Мітки та позначені чанки НЕ змінюються. Це не скасувати.",
+						this::resetOptions);
 
-				y2 = addToggle(col2X, y2, "Кордон території",
-						"Підсвічує жовтим межу твоїх позначених чанків (\"свого міста\"). Клавіша за замовчуванням: H.",
+				c2.toggle("Кордон території", "Підсвічує жовтим межу твоїх позначених чанків (\"свого міста\"). Клавіша: H.",
 						() -> cfg.territoryBorder, v -> cfg.territoryBorder = v);
-				y2 = addClaimButton(col2X, y2);
-				y2 = addButton(col2X, y2, "Очистити територію (цей світ)",
-						"Прибирає ВСІ позначені чанки в поточному вимірі. Це не скасувати.",
+				c2.claimButton();
+				c2.button("Очистити територію", "Прибирає ВСІ позначені чанки в поточному вимірі. Це не скасувати.",
 						this::clearTerritory);
 			}
 			case MINIMAP -> {
-				y1 = addToggle(col1X, y1, "Мінімапа",
-						"Показувати невеличку мапу рельєфу в кутку екрана. Ніяких мобів чи гравців вона не показує — лише блоки.",
+				c1.toggle("Мінімапа", "Невеличка мапа рельєфу в кутку екрана. Ніяких мобів чи гравців вона не показує — лише блоки.",
 						() -> cfg.minimap, v -> cfg.minimap = v);
-				y1 = addCycle(col1X, y1, "Кут екрана",
-						"У якому куті малювати мінімапу.",
+				c1.cycle("Кут екрана", "У якому куті малювати мінімапу.",
 						() -> cfg.minimapCorner.name(), this::cycleMinimapCorner, this::cornerLabel);
-				y1 = addStepper(col1X, y1, "Розмір (px)",
-						"Розмір панелі мінімапи в пікселях.",
+				c1.stepper("Розмір (px)", "Розмір панелі мінімапи в пікселях.",
 						() -> cfg.minimapSize, v -> cfg.minimapSize = v, 16, 64, 320);
-				y1 = addStepper(col1X, y1, "Наближення",
-						"Скільки пікселів мінімапи припадає на 1 блок світу. Більше — детальніше, але охоплює менше території.",
+				c1.stepper("Наближення", "Скільки пікселів мінімапи припадає на 1 блок світу. Більше — детальніше, але охоплює менше території.",
 						() -> cfg.minimapZoom, v -> cfg.minimapZoom = v, 1, 1, 6);
-				y1 = addStepper(col1X, y1, "Зсув по X",
-						"Ручне зміщення мінімапи вбік.",
+				c1.stepper("Зсув по X", "Ручне зміщення мінімапи вбік.",
 						() -> cfg.minimapOffsetX, v -> cfg.minimapOffsetX = v, 4, -400, 400);
-				y1 = addStepper(col1X, y1, "Зсув по Y",
-						"Ручне зміщення мінімапи вгору/вниз.",
+				c1.stepper("Зсув по Y", "Ручне зміщення мінімапи вгору/вниз.",
 						() -> cfg.minimapOffsetY, v -> cfg.minimapOffsetY = v, 4, -400, 400);
-				y1 = addToggle(col1X, y1, "Стрілки до міток за межами мапи",
-						"Коли мітка зараз не влазить у видиму область мінімапи (замало наближення чи задалеко), показує трикутник на краю панелі в її напрямку.",
+				c1.toggle("Стрілки до міток", "Коли мітка не влазить у видиму область мінімапи, показує трикутник на краю панелі в її напрямку.",
 						() -> cfg.minimapWaypointArrows, v -> cfg.minimapWaypointArrows = v);
 
-				y2 = addButton(col2X, y2, "Відкрити повну карту",
-						"Показує всі досліджені чанки цього світу й дозволяє ставити мітки. Клавіша за замовчуванням: M.",
+				c2.button("Відкрити повну карту", "Показує всі досліджені чанки цього світу й дозволяє ставити мітки. Клавіша: M.",
 						() -> {
 							if (Minecraft.getInstance().level != null) {
 								Minecraft.getInstance().setScreen(new MapScreen(this));
 							}
 						});
-				y2 = addButton(col2X, y2, "Очистити карту (цей світ)",
-						"Прибирає ВСІ збережені чанки й мітки для поточного світу/сервера. Це не скасувати.",
+				c2.button("Очистити карту", "Прибирає ВСІ збережені чанки й мітки для поточного світу/сервера. Це не скасувати.",
 						this::clearMap);
 			}
 			case INFO -> {
-				y1 = addToggle(col1X, y1, "Лічильник FPS",
-						"Показувати поточну кількість кадрів за секунду.",
+				c1.toggle("Лічильник FPS", "Показувати поточну кількість кадрів за секунду.",
 						() -> cfg.showFps, v -> cfg.showFps = v);
-				y1 = addCycle(col1X, y1, "Кут екрана", "Де саме малювати панель FPS/координат.",
+				c1.cycle("Кут екрана", "Де саме малювати панель FPS/координат.",
 						() -> cfg.infoPanelCorner.name(), this::cycleAnyCorner, this::cornerLabel);
-				y1 = addStepper(col1X, y1, "Зсув по X",
-						"Ручне зміщення інфо-панелі вбік.",
+				c1.stepper("Зсув по X", "Ручне зміщення інфо-панелі вбік.",
 						() -> cfg.infoPanelOffsetX, v -> cfg.infoPanelOffsetX = v, 4, -300, 300);
-				y1 = addStepper(col1X, y1, "Зсув по Y",
-						"Ручне зміщення інфо-панелі вгору/вниз.",
+				c1.stepper("Зсув по Y", "Ручне зміщення інфо-панелі вгору/вниз.",
 						() -> cfg.infoPanelOffsetY, v -> cfg.infoPanelOffsetY = v, 4, -300, 300);
-				y1 = addToggle(col1X, y1, "Компас",
-						"Показувати напрям погляду (сторону світу і градуси) в інфо-панелі.",
+				c1.toggle("Компас", "Показувати напрям погляду (сторону світу і градуси) в інфо-панелі.",
 						() -> cfg.showCompass, v -> cfg.showCompass = v);
 
-				y2 = addToggle(col2X, y2, "Координата X",
-						"Показати вісь X у панелі координат.",
+				c2.toggle("Координата X", "Показати вісь X у панелі координат.",
 						() -> cfg.showCoordX, v -> cfg.showCoordX = v);
-				y2 = addToggle(col2X, y2, "Координата Y (висота)",
-						"Показати лише висоту, не вмикаючи X і Z.",
+				c2.toggle("Координата Y (висота)", "Показати лише висоту, не вмикаючи X і Z.",
 						() -> cfg.showCoordY, v -> cfg.showCoordY = v);
-				y2 = addToggle(col2X, y2, "Координата Z",
-						"Показати вісь Z у панелі координат.",
+				c2.toggle("Координата Z", "Показати вісь Z у панелі координат.",
 						() -> cfg.showCoordZ, v -> cfg.showCoordZ = v);
-				y2 = addToggle(col2X, y2, "Координати чанка",
-						"Показати номер чанка та позицію в ньому.",
+				c2.toggle("Координати чанка", "Показати номер чанка та позицію в ньому.",
 						() -> cfg.showChunkCoords, v -> cfg.showChunkCoords = v);
-				y2 = addToggle(col2X, y2, "Таймер бою",
-						"Показує в інфо-панелі, скільки секунд лишилось \"бойового тегу\" після того, як тебе щойно вдарили або ти сам атакував іншого гравця. Корисно, якщо на сервері карається вихід із гри під час бою.",
+				c2.toggle("Таймер бою", "Скільки секунд лишилось \"бойового тегу\" після удару чи атаки. Корисно, якщо на сервері карається вихід із гри під час бою.",
 						() -> cfg.combatTimer, v -> cfg.combatTimer = v);
-				y2 = addStepper(col2X, y2, "Тривалість бою (с)",
-						"Скільки секунд триває позначка бою після останнього удару чи атаки.",
+				c2.stepper("Тривалість бою (с)", "Скільки секунд триває позначка бою.",
 						() -> cfg.combatTimerSeconds, v -> cfg.combatTimerSeconds = v, 5, 5, 60);
 			}
 			case DAMAGE -> {
-				y1 = addToggle(col1X, y1, "Реальна шкода при криті",
-						"Окрема панель: скільки HP ми ФАКТИЧНО зняли цілі своїм критичним ударом, і скільки нам ФАКТИЧНО зняв критом противник (не \"сирий\" урон предмета, а вже з урахуванням броні/зачарувань/абсорбції).",
+				c1.toggle("Реальна шкода при криті", "Скільки HP ми ФАКТИЧНО зняли цілі своїм критичним ударом, і скільки нам ФАКТИЧНО зняв критом противник.",
 						() -> cfg.damageMeter, v -> cfg.damageMeter = v);
-				y1 = addToggle(col1X, y1, "Над прицілом",
-						"Показувати панель по центру екрана, трохи вище прицілу, замість кута екрана.",
+				c1.toggle("Над прицілом", "Показувати панель по центру екрана, трохи вище прицілу, замість кута екрана.",
 						() -> cfg.damageMeterAboveCrosshair, v -> cfg.damageMeterAboveCrosshair = v);
-				y1 = addSlider(col1X, y1, "Розмір тексту",
-						"Масштаб шрифту панелі: 1.0 — звичайний розмір, менше — дрібніший і компактніший текст.",
+				c1.slider("Розмір тексту", "Масштаб шрифту панелі: 1.0 — звичайний розмір, менше — дрібніший.",
 						() -> (double) cfg.damageMeterScale, v -> cfg.damageMeterScale = (float) v, 0.1, 0.4, 1.5);
 
-				y2 = addCycle(col2X, y2, "Кут екрана",
-						"У якому куті малювати панель шкоди, коли вона НЕ над прицілом.",
+				c2.cycle("Кут екрана", "У якому куті малювати панель шкоди, коли вона НЕ над прицілом.",
 						() -> cfg.damageMeterCorner.name(), this::cycleDamageMeterCorner, this::cornerLabel);
-				y2 = addStepper(col2X, y2, "Зсув по X",
-						"Ручне зміщення панелі шкоди вбік.",
+				c2.stepper("Зсув по X", "Ручне зміщення панелі шкоди вбік.",
 						() -> cfg.damageMeterOffsetX, v -> cfg.damageMeterOffsetX = v, 4, -300, 300);
-				y2 = addStepper(col2X, y2, "Зсув по Y",
-						"Ручне зміщення панелі шкоди вгору/вниз. За замовчуванням трохи опущена, щоб стояти під панеллю FPS/координат.",
+				c2.stepper("Зсув по Y", "Зміщення панелі шкоди вгору/вниз. За замовчуванням трохи опущена, щоб стояти під панеллю FPS/координат.",
 						() -> cfg.damageMeterOffsetY, v -> cfg.damageMeterOffsetY = v, 4, -300, 300);
 			}
 			case MISC -> {
-				y1 = addToggle(col1X, y1, "Шкода в тултипі зброї",
-						"При наведенні на меч/сокиру в інвентарі дописує розраховану реальну шкоду по HP: базовий урон + усі зачарування, що впливають на шкоду (Sharpness/Smite/Bane of Arthropods, а також кастомні чари з модів на кшталт ExcellentEnchants) з урахуванням рівня кожного, окремо критичний удар.",
+				c1.toggle("Шкода в тултипі зброї", "При наведенні на меч в інвентарі дописує розраховану реальну шкоду: базовий урон + усі зачарування, що впливають на шкоду, окремо критичний удар.",
 						() -> cfg.weaponDamageTooltip, v -> cfg.weaponDamageTooltip = v);
-				y1 = addToggle(col1X, y1, "Світло від предмета в руці",
-						"Факел, ліхтар, лампа, багаття тощо в основній АБО другорядній руці освітлюють територію навколо тебе, так само якби ти поставив цей предмет на землю. Тотем безсмертя поставити не можна, тому світить як факел.",
+				c1.toggle("Світло від предмета в руці", "Факел/ліхтар/лампа/багаття в руці освітлюють територію навколо тебе. Тотем світить як факел. Важливо: світло НЕ створює жодного блоку у світі — нічого не заважає будувати.",
 						() -> cfg.heldItemDynamicLight, v -> cfg.heldItemDynamicLight = v);
+				c1.stepper("Яскравість світла", "Наскільки сильно світить предмет у руці: 15 — як справжній факел, менше — світло м'якше й не \"пробиває\" так далеко крізь стіни.",
+						() -> cfg.heldItemLightLevel, v -> cfg.heldItemLightLevel = v, 1, 1, 15);
 
-				// Ширина чату — реальна ванільна опція гри, щоб не робити окремий
-				// кастомний рендер чату (і не конфліктувати з ним): просто даємо
-				// швидкий доступ до повзунка ширини прямо з нашого меню.
+				// Ширина чату — реальна ванільна опція гри: даємо швидкий доступ
+				// до повзунка, не роблячи окремий кастомний рендер чату.
 				Minecraft mc = Minecraft.getInstance();
-				this.addRenderableWidget(mc.options.chatWidth().createButton(mc.options, col1X, y1, COL_WIDTH));
-				y1 += ROW_HEIGHT;
+				c2.raw(mc.options.chatWidth().createButton(mc.options, c2.x, CONTENT_TOP, COL_WIDTH));
 			}
 		}
+	}
 
-		int bottomMost = Math.max(y1, y2) + 10;
-		this.addRenderableWidget(Button.builder(Component.literal("Готово"), b -> {
-			cfg.save();
-			Minecraft.getInstance().setScreen(parent);
-		}).bounds(this.width / 2 - 75, Math.min(bottomMost, this.height - 28), 150, 20).build());
+	/**
+	 * Будує одну колонку рядків опцій. Рядки, що не потрапляють у видиму
+	 * частину (з урахуванням прокрутки), просто НЕ створюються — це і є
+	 * головний фікс: раніше вони створювалися й опинялися за межами екрана.
+	 */
+	private final class RowBuilder {
+		private final int x;
+		private int count = 0;
+
+		RowBuilder(int x) {
+			this.x = x;
+		}
+
+		/** Чи цей рядок зараз видимий? */
+		private boolean visible() {
+			int index = count;
+			count++;
+			return index >= scroll && index < scroll + VISIBLE_ROWS;
+		}
+
+		/** Y-координата для номера рядка (з урахуванням прокрутки). */
+		private int yFor(int index) {
+			return CONTENT_TOP + (index - scroll) * ROW_HEIGHT;
+		}
+
+		private int currentY() {
+			return CONTENT_TOP + (count - 1 - scroll) * ROW_HEIGHT;
+		}
+
+		void toggle(String label, String tooltip, BooleanSupplier getter, Consumer<Boolean> setter) {
+			if (!visible()) return;
+			Button b = Button.builder(
+					toggleText(label, getter.getAsBoolean()),
+					btn -> {
+						boolean newValue = !getter.getAsBoolean();
+						setter.accept(newValue);
+						btn.setMessage(toggleText(label, newValue));
+					}
+			).bounds(x, currentY(), COL_WIDTH, 20).tooltip(Tooltip.create(Component.literal(tooltip))).build();
+			addRenderableWidget(b);
+		}
+
+		void cycle(String label, String tooltip, Supplier<String> getter, Runnable advance, java.util.function.Function<String, String> valueLabel) {
+			if (!visible()) return;
+			Button b = Button.builder(
+					Component.literal(label + ": " + valueLabel.apply(getter.get())),
+					btn -> {
+						advance.run();
+						btn.setMessage(Component.literal(label + ": " + valueLabel.apply(getter.get())));
+					}
+			).bounds(x, currentY(), COL_WIDTH, 20).tooltip(Tooltip.create(Component.literal(tooltip))).build();
+			addRenderableWidget(b);
+		}
+
+		void stepper(String label, String tooltip, java.util.function.IntSupplier getter, java.util.function.IntConsumer setter, int step, int min, int max) {
+			if (!visible()) return;
+			int y = currentY();
+			int btnW = 26;
+			int labelW = COL_WIDTH - btnW * 2 - 4;
+
+			Button valueDisplay = Button.builder(Component.literal(label + ": " + getter.getAsInt()), b -> {})
+					.bounds(x + btnW + 2, y, labelW, 20).build();
+			valueDisplay.active = false;
+
+			Button minus = Button.builder(Component.literal("-" + step), b -> {
+				setter.accept(clamp(getter.getAsInt() - step, min, max));
+				valueDisplay.setMessage(Component.literal(label + ": " + getter.getAsInt()));
+			}).bounds(x, y, btnW, 20).tooltip(Tooltip.create(Component.literal(tooltip))).build();
+
+			Button plus = Button.builder(Component.literal("+" + step), b -> {
+				setter.accept(clamp(getter.getAsInt() + step, min, max));
+				valueDisplay.setMessage(Component.literal(label + ": " + getter.getAsInt()));
+			}).bounds(x + btnW + labelW + 4, y, btnW, 20).tooltip(Tooltip.create(Component.literal(tooltip))).build();
+
+			addRenderableWidget(minus);
+			addRenderableWidget(valueDisplay);
+			addRenderableWidget(plus);
+		}
+
+		void slider(String label, String tooltip, DoubleSupplier getter, DoubleConsumer setter, double step, double min, double max) {
+			if (!visible()) return;
+			int y = currentY();
+			int btnW = 26;
+			int labelW = COL_WIDTH - btnW * 2 - 4;
+
+			Button valueDisplay = Button.builder(Component.literal(label + ": " + formatNum(getter.getAsDouble())), b -> {})
+					.bounds(x + btnW + 2, y, labelW, 20).build();
+			valueDisplay.active = false;
+
+			Button minus = Button.builder(Component.literal("-"), b -> {
+				setter.accept(clampD(getter.getAsDouble() - step, min, max));
+				valueDisplay.setMessage(Component.literal(label + ": " + formatNum(getter.getAsDouble())));
+			}).bounds(x, y, btnW, 20).tooltip(Tooltip.create(Component.literal(tooltip))).build();
+
+			Button plus = Button.builder(Component.literal("+"), b -> {
+				setter.accept(clampD(getter.getAsDouble() + step, min, max));
+				valueDisplay.setMessage(Component.literal(label + ": " + formatNum(getter.getAsDouble())));
+			}).bounds(x + btnW + labelW + 4, y, btnW, 20).tooltip(Tooltip.create(Component.literal(tooltip))).build();
+
+			addRenderableWidget(minus);
+			addRenderableWidget(valueDisplay);
+			addRenderableWidget(plus);
+		}
+
+		void button(String label, String tooltip, Runnable action) {
+			if (!visible()) return;
+			Button b = Button.builder(Component.literal(label), btn -> action.run())
+					.bounds(x, currentY(), COL_WIDTH, 20)
+					.tooltip(Tooltip.create(Component.literal(tooltip)))
+					.build();
+			addRenderableWidget(b);
+		}
+
+		void claimButton() {
+			if (!visible()) return;
+			Button b = Button.builder(Component.literal(claimLabel()), btn -> {
+				toggleClaimCurrentChunk();
+				btn.setMessage(Component.literal(claimLabel()));
+			}).bounds(x, currentY(), COL_WIDTH, 20)
+					.tooltip(Tooltip.create(Component.literal("Додає або прибирає той чанк, у якому ти зараз стоїш, з твоєї території. Клавіша: J.")))
+					.build();
+			b.active = Minecraft.getInstance().level != null && Minecraft.getInstance().player != null;
+			addRenderableWidget(b);
+		}
+
+		/** Готовий віджди (наприклад, ванільний повзунок ширини чату). */
+		void raw(net.minecraft.client.gui.components.AbstractWidget widget) {
+			if (!visible()) return;
+			widget.setY(currentY());
+			addRenderableWidget(widget);
+		}
 	}
 
 	private void switchTab(Tab tab) {
 		this.currentTab = tab;
+		this.scroll = 0;
 		this.clearWidgets();
 		this.init();
 	}
 
-	// БАГ-ФІКС/ПОКРАЩЕННЯ: раніше кут своєї броні можна було перемикати лише
-	// між двома нижніми кутами, хоча сам ArmorHud.renderOwn вже давно вміє
-	// малювати панель і зверху (onTop) — тепер кут броні цикається так само,
-	// як і всі інші панелі (мінімапа, інфо-панель, бафи), і всі 4 кути реально доступні.
+	private void scrollBy(int rows) {
+		int newScroll = scroll + rows;
+		int maxScroll = Math.max(0, totalRows - VISIBLE_ROWS);
+		int clamped = Mth.clamp(newScroll, 0, maxScroll);
+		if (clamped == scroll) return;
+
+		scroll = clamped;
+		// Перебудовуємо віджди — так рядки, які стали видимими/невидимими,
+		// створюються або зникають правильно.
+		this.clearWidgets();
+		this.init();
+	}
+
+	private void clampScroll() {
+		int maxScroll = Math.max(0, totalRows - VISIBLE_ROWS);
+		scroll = Mth.clamp(scroll, 0, maxScroll);
+	}
+
+	@Override
+	public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+		if (scrollY > 0) {
+			scrollBy(-1);
+			return true;
+		} else if (scrollY < 0) {
+			scrollBy(1);
+			return true;
+		}
+		return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+	}
+
+	@Override
+	public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+		super.render(graphics, mouseX, mouseY, partialTick);
+		graphics.drawCenteredString(this.font, this.title, this.width / 2, 8, 0xFFFFFF);
+
+		// Індикатор прокрутки — тонка смужка праворуч, щоб було видно, що
+		// список довший за екран і є куди гортати.
+		if (totalRows > VISIBLE_ROWS) {
+			int trackH = VISIBLE_ROWS * ROW_HEIGHT;
+			int thumbH = Math.max(20, trackH * VISIBLE_ROWS / totalRows);
+			int maxScroll = totalRows - VISIBLE_ROWS;
+			int thumbY = CONTENT_TOP + (maxScroll == 0 ? 0 : (trackH - thumbH) * scroll / maxScroll);
+			int x = this.width - 6;
+			graphics.fill(x, CONTENT_TOP, x + 3, CONTENT_TOP + trackH, 0x40FFFFFF);
+			graphics.fill(x, thumbY, x + 3, thumbY + thumbH, 0xB0FFFFFF);
+		}
+	}
+
+	@Override
+	public boolean isPauseScreen() {
+		return false;
+	}
+
+	@Override
+	public void onClose() {
+		cfg.save();
+		Minecraft.getInstance().setScreen(parent);
+	}
+
+	// --- перемикання кутів/розкладок ---
+
 	private void cycleArmorCorner() {
 		HudConfig.ScreenCorner[] all = HudConfig.ScreenCorner.values();
 		int next = (cfg.armorCorner.ordinal() + 1) % all.length;
@@ -357,6 +528,12 @@ public class ConfigScreen extends Screen {
 		cfg.save();
 	}
 
+	private void resetOptions() {
+		cfg.resetToDefaults();
+		this.clearWidgets();
+		this.init();
+	}
+
 	private String armorLayoutLabel(String v) {
 		return cfg.armorLayout == HudConfig.ArmorLayout.GRID ? "Сітка 2x2" : "Один рядок";
 	}
@@ -370,106 +547,6 @@ public class ConfigScreen extends Screen {
 		};
 	}
 
-	// ---- рядки опцій ----
-
-	private int addToggle(int x, int y, String label, String tooltip, BooleanSupplier getter, Consumer<Boolean> setter) {
-		Button b = Button.builder(
-				toggleText(label, getter.getAsBoolean()),
-				btn -> {
-					boolean newValue = !getter.getAsBoolean();
-					setter.accept(newValue);
-					btn.setMessage(toggleText(label, newValue));
-				}
-		).bounds(x, y, COL_WIDTH, 20).tooltip(Tooltip.create(Component.literal(tooltip))).build();
-		this.addRenderableWidget(b);
-		return y + ROW_HEIGHT;
-	}
-
-	private int addCycle(int x, int y, String label, String tooltip, Supplier<String> getter, Runnable advance, java.util.function.Function<String, String> valueLabel) {
-		Button b = Button.builder(
-				Component.literal(label + ": " + valueLabel.apply(getter.get())),
-				btn -> {
-					advance.run();
-					btn.setMessage(Component.literal(label + ": " + valueLabel.apply(getter.get())));
-				}
-		).bounds(x, y, COL_WIDTH, 20).tooltip(Tooltip.create(Component.literal(tooltip))).build();
-		this.addRenderableWidget(b);
-		return y + ROW_HEIGHT;
-	}
-
-	private int addStepper(int x, int y, String label, String tooltip, java.util.function.IntSupplier getter, java.util.function.IntConsumer setter, int step, int min, int max) {
-		int btnW = 26;
-		int labelW = COL_WIDTH - btnW * 2 - 4;
-
-		Button valueDisplay = Button.builder(Component.literal(label + ": " + getter.getAsInt()), b -> {})
-				.bounds(x + btnW + 2, y, labelW, 20).build();
-		valueDisplay.active = false;
-
-		Button minus = Button.builder(Component.literal("-" + step), b -> {
-			int v = clamp(getter.getAsInt() - step, min, max);
-			setter.accept(v);
-			valueDisplay.setMessage(Component.literal(label + ": " + getter.getAsInt()));
-		}).bounds(x, y, btnW, 20).tooltip(Tooltip.create(Component.literal(tooltip))).build();
-
-		Button plus = Button.builder(Component.literal("+" + step), b -> {
-			int v = clamp(getter.getAsInt() + step, min, max);
-			setter.accept(v);
-			valueDisplay.setMessage(Component.literal(label + ": " + getter.getAsInt()));
-		}).bounds(x + btnW + labelW + 4, y, btnW, 20).tooltip(Tooltip.create(Component.literal(tooltip))).build();
-
-		this.addRenderableWidget(minus);
-		this.addRenderableWidget(valueDisplay);
-		this.addRenderableWidget(plus);
-		return y + ROW_HEIGHT;
-	}
-
-	private int addSlider(int x, int y, String label, String tooltip, DoubleSupplier getter, DoubleConsumer setter, double step, double min, double max) {
-		int btnW = 26;
-		int labelW = COL_WIDTH - btnW * 2 - 4;
-		Button valueDisplay = Button.builder(Component.literal(label + ": " + formatNum(getter.getAsDouble())), b -> {})
-				.bounds(x + btnW + 2, y, labelW, 20).build();
-		valueDisplay.active = false;
-
-		Button minus = Button.builder(Component.literal("-"), b -> {
-			double v = clampD(getter.getAsDouble() - step, min, max);
-			setter.accept(v);
-			valueDisplay.setMessage(Component.literal(label + ": " + formatNum(getter.getAsDouble())));
-		}).bounds(x, y, btnW, 20).tooltip(Tooltip.create(Component.literal(tooltip))).build();
-
-		Button plus = Button.builder(Component.literal("+"), b -> {
-			double v = clampD(getter.getAsDouble() + step, min, max);
-			setter.accept(v);
-			valueDisplay.setMessage(Component.literal(label + ": " + formatNum(getter.getAsDouble())));
-		}).bounds(x + btnW + labelW + 4, y, btnW, 20).tooltip(Tooltip.create(Component.literal(tooltip))).build();
-
-		this.addRenderableWidget(minus);
-		this.addRenderableWidget(valueDisplay);
-		this.addRenderableWidget(plus);
-		return y + ROW_HEIGHT;
-	}
-
-	private int addButton(int x, int y, String label, String tooltip, Runnable action) {
-		Button b = Button.builder(Component.literal(label), btn -> action.run())
-				.bounds(x, y, COL_WIDTH, 20)
-				.tooltip(Tooltip.create(Component.literal(tooltip)))
-				.build();
-		this.addRenderableWidget(b);
-		return y + ROW_HEIGHT;
-	}
-
-	/** Кнопка "додати/прибрати поточний чанк" — текст і стан оновлюються прямо при кліку. */
-	private int addClaimButton(int x, int y) {
-		Button b = Button.builder(Component.literal(claimLabel()), btn -> {
-			toggleClaimCurrentChunk();
-			btn.setMessage(Component.literal(claimLabel()));
-		}).bounds(x, y, COL_WIDTH, 20)
-				.tooltip(Tooltip.create(Component.literal("Додає або прибирає той чанк, у якому ти зараз стоїш, з твоєї території. Клавіша за замовчуванням: J.")))
-				.build();
-		b.active = Minecraft.getInstance().level != null && Minecraft.getInstance().player != null;
-		this.addRenderableWidget(b);
-		return y + ROW_HEIGHT;
-	}
-
 	private String claimLabel() {
 		Minecraft mc = Minecraft.getInstance();
 		if (mc.level == null || mc.player == null) return "Додати поточний чанк";
@@ -477,7 +554,7 @@ public class ConfigScreen extends Screen {
 		int cx = Mth.floor(mc.player.getX()) >> 4;
 		int cz = Mth.floor(mc.player.getZ()) >> 4;
 		boolean claimed = TerritoryManager.isClaimed(dim, cx, cz);
-		return claimed ? "\u2717 Прибрати поточний чанк" : "\u2713 Додати поточний чанк";
+		return claimed ? "✗ Прибрати поточний чанк" : "✓ Додати поточний чанк";
 	}
 
 	private void toggleClaimCurrentChunk() {
@@ -508,23 +585,6 @@ public class ConfigScreen extends Screen {
 	}
 
 	private Component toggleText(String label, boolean value) {
-		return Component.literal(label + ": " + (value ? "\u00A7aУВІМК" : "\u00A7cвимк"));
-	}
-
-	@Override
-	public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-		super.render(graphics, mouseX, mouseY, partialTick);
-		graphics.drawCenteredString(this.font, this.title, this.width / 2, 8, 0xFFFFFF);
-	}
-
-	@Override
-	public boolean isPauseScreen() {
-		return false;
-	}
-
-	@Override
-	public void onClose() {
-		cfg.save();
-		Minecraft.getInstance().setScreen(parent);
+		return Component.literal(label + ": " + (value ? "§aУВІМК" : "§cвимк"));
 	}
 }

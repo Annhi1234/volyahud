@@ -55,6 +55,13 @@ public class HudConfig {
 	 * для нього зроблено виняток: він світить як звичайний факел.
 	 */
 	public boolean heldItemDynamicLight = true;
+	/**
+	 * Максимальний рівень світла (0-15), який дає предмет у руці. 0 = вимкнено
+	 * фічу повністю, 15 = максимум (як справжній факел). Менші значення
+	 * роблять світло "м'якшим" — воно світить ближче й не "пробиває" так далеко
+	 * крізь стіни, як повноцінний факел.
+	 */
+	public int heldItemLightLevel = 15;
 	/** Показувати відстань (у блоках) поруч з HP-міткою над іншими гравцями. */
 	public boolean healthTagDistance = true;
 	/** Дописувати в тултип зброї (наведення в інвентарі) розраховану реальну шкоду по HP: база + усі чари, що впливають на шкоду (Sharpness/Smite/BoA, а також кастомні чари модів на кшталт ExcellentEnchants) + окремо крит. */
@@ -250,6 +257,11 @@ public class HudConfig {
 		if (combatTimerSeconds <= 0) combatTimerSeconds = 15;
 		if (territoryChunks == null) territoryChunks = new HashMap<>();
 		if (waypoints == null) waypoints = new HashMap<>();
+		// Той самий клас бага для нового поля рівня світла: у старому
+		// конфігу, збереженому до появи цієї опції, Gson підставить "сирий" 0
+		// замість дефолтних 15. 0 означав би "максимально тьмяне світло",
+		// хоча користувач ніколи таке не вибирав — повертаємо дефолт.
+		if (heldItemLightLevel <= 0) heldItemLightLevel = 15;
 		// На випадок пошкодженого/частково записаного файлу — прибираємо
 		// будь-які null-записи всередині самих мап, щоб не впасти пізніше
 		// на territoryChunks.get(dim).contains(...) чи waypointsFor(dim).
@@ -266,5 +278,93 @@ public class HudConfig {
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
+	}
+
+	/**
+	 * Повертає всі налаштування до стандартних (кнопка "Скинути" в меню).
+	 *
+	 * <p>Робимо це НЕ заміною об'єкта, а копіюванням полів зі свіжого
+	 * екземпляра: {@link #INSTANCE} — статичне поле, на яке посилаються всі
+	 * HUD-класи, тому замінювати сам об'єкт не можна (усі посилання
+	 * "залишилися б" б на старому). Копіюємо поле за полем — так свіжий
+	 * дефолт зберігається в одному місці (початкові значення полів) і
+	 * скидання завжди залишається синхронним із ними.
+	 */
+	public void resetToDefaults() {
+		HudConfig d = new HudConfig();
+
+		ownArmorHud = d.ownArmorHud;
+		otherPlayersArmorHud = d.otherPlayersArmorHud;
+		healthTags = d.healthTags;
+		pearlTrajectory = d.pearlTrajectory;
+		pearlTrail = d.pearlTrail;
+		pvpRadar = d.pvpRadar;
+		targetBuffsHud = d.targetBuffsHud;
+		inventoryPeek = d.inventoryPeek;
+		totemAlert = d.totemAlert;
+		heldItemDynamicLight = d.heldItemDynamicLight;
+		heldItemLightLevel = d.heldItemLightLevel;
+		healthTagDistance = d.healthTagDistance;
+		weaponDamageTooltip = d.weaponDamageTooltip;
+
+		showFps = d.showFps;
+		showCoordX = d.showCoordX;
+		showCoordY = d.showCoordY;
+		showCoordZ = d.showCoordZ;
+		showChunkCoords = d.showChunkCoords;
+		showCompass = d.showCompass;
+		infoPanelCorner = d.infoPanelCorner;
+		infoPanelOffsetX = d.infoPanelOffsetX;
+		infoPanelOffsetY = d.infoPanelOffsetY;
+
+		damageMeter = d.damageMeter;
+		damageMeterAboveCrosshair = d.damageMeterAboveCrosshair;
+		damageMeterCorner = d.damageMeterCorner;
+		damageMeterOffsetX = d.damageMeterOffsetX;
+		damageMeterOffsetY = d.damageMeterOffsetY;
+		damageMeterScale = d.damageMeterScale;
+
+		otherHpOffsetY = d.otherHpOffsetY;
+		otherEquipmentOffsetY = d.otherEquipmentOffsetY;
+		otherHpEquipmentGap = d.otherHpEquipmentGap;
+
+		targetBuffsCorner = d.targetBuffsCorner;
+		targetBuffsOffsetX = d.targetBuffsOffsetX;
+		targetBuffsOffsetY = d.targetBuffsOffsetY;
+
+		totemAlertOffsetX = d.totemAlertOffsetX;
+		totemAlertOffsetY = d.totemAlertOffsetY;
+
+		pvpRadarOffsetX = d.pvpRadarOffsetX;
+		pvpRadarOffsetY = d.pvpRadarOffsetY;
+
+		otherPlayersRenderDistance = d.otherPlayersRenderDistance;
+		pvpRadarActivationDistance = d.pvpRadarActivationDistance;
+
+		armorLayout = d.armorLayout;
+		armorCorner = d.armorCorner;
+		armorOffsetX = d.armorOffsetX;
+		armorOffsetY = d.armorOffsetY;
+		armorFlushBottom = d.armorFlushBottom;
+
+		chunkGrid = d.chunkGrid;
+		chunkGridLabels = d.chunkGridLabels;
+
+		territoryBorder = d.territoryBorder;
+
+		minimap = d.minimap;
+		minimapSize = d.minimapSize;
+		minimapCorner = d.minimapCorner;
+		minimapOffsetX = d.minimapOffsetX;
+		minimapOffsetY = d.minimapOffsetY;
+		minimapZoom = d.minimapZoom;
+		minimapWaypointArrows = d.minimapWaypointArrows;
+
+		combatTimer = d.combatTimer;
+		combatTimerSeconds = d.combatTimerSeconds;
+
+		// Територію та мітки НЕ скидаємо — це дані гри, а не налаштування
+		// (їх можна скинути окремою кнопкою у вкладці "Будівництво"/"Мінімапа").
+		save();
 	}
 }

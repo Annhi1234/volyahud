@@ -4,6 +4,7 @@ import com.volyacraft.volyahud.client.config.HudConfig;
 import com.volyacraft.volyahud.client.hud.DamageMeter;
 import com.volyacraft.volyahud.client.hud.TotemAlert;
 import net.minecraft.client.multiplayer.ClientPacketListener;
+import net.minecraft.network.protocol.game.ClientboundAnimatePacket;
 import net.minecraft.network.protocol.game.ClientboundEntityEventPacket;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.Level;
@@ -13,30 +14,38 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * ClientboundEntityEventPacket зі status == 35 — це ванільний "статус-івент",
- * яким сервер повідомляє клієнтів про спрацювання тотема безсмертя
- * (щоб показати партиклі/звук всім навколо). Ми лише читаємо цей вже
- * публічний мережевий пакет трохи раніше, ніж він доходить до рендеру
- * партиклів, і показуємо власне сповіщення.
+ * Перехоплення двох публічних серверних пакетів, які ми й так отримуємо:
  *
- * ПРИМІТКА: якщо після компіляції Loom скаже, що метод handleEntityEvent
- * не знайдено — назва методу в офіційних мапінгах могла трохи відрізнятись
- * між збірками 1.21.4; тоді треба звірити актуальну назву через
- * genSources/decompile і поправити тут @Inject(method = "...").
+ * <ul>
+ *   <li><b>ClientboundEntityEventPacket</b> зі статусом 35 — ванільний
+ *       "статус-івент", яким сервер повідомляє клієнтів про спрацювання тотема
+ *       безсмертя (щоб показати партиклі/звук усім навколо). Ми лише читаємо
+ *       цей вже публічний мережевий пакет трохи раніше, ніж він доходить до
+ *       рендеру партиклів, і показуємо власне текстове сповіщення.</li>
+ *   <li><b>ClientboundAnimatePacket</b> з дією 4 (звичайний крит) або 5
+ *       (магічний крит) — саме так сервер повідомляє про критичний удар
+ *       (щоб показати крит-партиклі).</li>
+ * </ul>
+ *
+ * <p><b>ВАЖЛИВИЙ ФІКС (панель реальної шкоди не працювала взагалі):</b>
+ * раніше крит ловився в тому самому {@code handleEntityEvent}, де й тотем —
+ * тобто ми чекали пакет, який сервер НІКОЛИ не надсилає для крита. Насправді
+ * крит приходить окремим пакетом {@link ClientboundAnimatePacket} (дії 4 і 5),
+ * і саме він обробляється у {@link ClientPacketListener#handleAnimate}. Тому
+ * "Реальна шкода (крит)" не показувалася ніколи — тепер ловимо правильний
+ * пакет у правильному методі.
  */
 @Mixin(ClientPacketListener.class)
 public class ClientPacketListenerMixin {
 
+	/**
+	 * Тотем безсмертя: статус-івент 35.
+	 */
 	@Inject(method = "handleEntityEvent", at = @At("HEAD"))
 	private void volyahud$onEntityEvent(ClientboundEntityEventPacket packet, CallbackInfo ci) {
-		byte id = packet.getEventId();
-		boolean isTotem = id == 35 && HudConfig.INSTANCE.totemAlert;
-		// id 4 = звичайний критичний удар, id 5 = магічний крит — той самий
-		// вже публічний статус-івент, яким сервер шле крит-партиклі всім
-		// навколо, лише читаємо його трохи раніше за рендер партиклів
-		// (детальніше — у коментарі над DamageMeter).
-		boolean isCrit = (id == 4 || id == 5) && HudConfig.INSTANCE.damageMeter;
-		if (!isTotem && !isCrit) return;
+		if (packet.getEventId() != 35 || !HudConfig.INSTANCE.totemAlert) {
+			return;
+		}
 
 		Level level = net.minecraft.client.Minecraft.getInstance().level;
 		if (level == null) return;
@@ -44,11 +53,30 @@ public class ClientPacketListenerMixin {
 		Entity entity = packet.getEntity(level);
 		if (entity == null) return;
 
-		if (isTotem) {
-			TotemAlert.onTotemUsed(entity);
+		TotemAlert.onTotemUsed(entity);
+	}
+
+	/**
+	 * Критичний удар: анімація-пакет, дії 4 (звичайний крит) і 5 (магічний крит).
+	 */
+	@Inject(method = "handleAnimate", at = @At("HEAD"))
+	private void volyahud$onAnimate(ClientboundAnimatePacket packet, CallbackInfo ci) {
+		if (!HudConfig.INSTANCE.damageMeter) {
+			return;
 		}
-		if (isCrit) {
-			DamageMeter.onCrit(entity);
+
+		int action = packet.getAction();
+		if (action != ClientboundAnimatePacket.CRITICAL_HIT
+				&& action != ClientboundAnimatePacket.MAGIC_CRITICAL_HIT) {
+			return;
 		}
+
+		Level level = net.minecraft.client.Minecraft.getInstance().level;
+		if (level == null) return;
+
+		Entity entity = level.getEntity(packet.getId());
+		if (entity == null) return;
+
+		DamageMeter.onCrit(entity);
 	}
 }

@@ -80,7 +80,20 @@ public final class ChunkColorCache {
 	private static int columnColor(LevelChunk chunk, ChunkPos cp, int localX, int localZ) {
 		int worldX = cp.getMinBlockX() + localX;
 		int worldZ = cp.getMinBlockZ() + localZ;
-		int topY = chunk.getHeight(Heightmap.Types.WORLD_SURFACE, worldX, worldZ) - 1;
+
+		// ВАЖЛИВИЙ ФІКС: Heightmap у ванілі приймає ЛОКАЛЬНІ координати
+		// всередині чанка (він сам маскує їх через "& 15"). Раніше ми передавали
+		// СВІТОВІ координати (worldX/worldZ) — тобто для чанків, що не
+		// починаються з 0, ми читали Heightmap ЗОВСІМ ІНШОГО стовпця
+		// (через маскування), тобто рельєф на мінімапі був "змішаний" з
+		// сусідніми чанками, а на виході за межі світу — вибивав у
+		// "темний" колір. Тепер передаємо локальні координати, як ванільний
+		// предмет-мапа.
+		//
+		// getHeight() повертає Y найвищого непрозорого блоку + 1, тобто
+		// "повітря над поверхнею". Саме тому ми віднімаємо 1, щоб узяти
+		// найвищий блок.
+		int topY = chunk.getHeight(Heightmap.Types.WORLD_SURFACE, localX, localZ) - 1;
 		if (topY < chunk.getMinY()) {
 			return 0xFF141414; // немає рельєфу (наприклад, дно порожнього чанка) — темно-сірий
 		}
