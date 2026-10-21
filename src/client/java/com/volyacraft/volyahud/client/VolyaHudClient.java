@@ -13,6 +13,7 @@ import com.volyacraft.volyahud.client.hud.DamageMeter;
 import com.volyacraft.volyahud.client.hud.DynamicLight;
 import com.volyacraft.volyahud.client.hud.FpsHud;
 import com.volyacraft.volyahud.client.hud.OverlayQueue;
+import com.volyacraft.volyahud.client.hud.PlayerFilter;
 import com.volyacraft.volyahud.client.hud.PearlTrajectory;
 import com.volyacraft.volyahud.client.hud.PvpRadar;
 import com.volyacraft.volyahud.client.hud.TerritoryBorder;
@@ -328,6 +329,9 @@ public class VolyaHudClient implements ClientModInitializer {
 			// Старий ClientLevel більше не існує — скидаємо стан динамічного
 			// світла без спроби повернути блок у ньому (і так уже нема куди).
 			DynamicLight.reset();
+			// Кеш таб-листа (для відсіювання серверних НПС) скидаємо —
+			// новий сервер має інший склад гравців.
+			PlayerFilter.reset();
 			// Приховування HUD — тимчасове, на одну сесію: після перезаходу в
 			// гру показуємо його знову, щоб гравець не лишився з порожнім
 			// екраном і не зрозумів, що мод зламався.

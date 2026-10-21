@@ -210,9 +210,13 @@ public class ArmorHud {
 		java.util.Set<Integer> seenThisFrame = SEEN_THIS_FRAME;
 		seenThisFrame.clear();
 
-		for (Player other : mc.level.players()) {
+		for (net.minecraft.client.player.AbstractClientPlayer other : mc.level.players()) {
 			if (other == mc.player) continue;
 			if (other.isSpectator()) continue;
+			// ФІКС: ігноруємо серверних НПС (Citizens та подібні). Вони
+			// теж приходять сюди як Player-сутності, і раніше над ними
+			// показувалися порожні слоти броні, що заважало в PvP.
+			if (!PlayerFilter.isRealPlayer(mc, other)) continue;
 			double dist = other.distanceTo(mc.player);
 			if (dist > cfg.otherPlayersRenderDistance) continue;
 			if (other.isInvisibleTo(mc.player)) continue;

@@ -30,8 +30,10 @@ public class PvpRadar {
 		var players = mc.level.players();
 		boolean anyNearby = false;
 		for (int i = 0, n = players.size(); i < n; i++) {
-			Player other = players.get(i);
+			net.minecraft.client.player.AbstractClientPlayer other = players.get(i);
 			if (other == self) continue;
+			// Серверні НПС не є гравцями — не показуємо їх на радарі.
+			if (!PlayerFilter.isRealPlayer(mc, other)) continue;
 			if (other.distanceTo(self) <= cfg.pvpRadarActivationDistance) {
 				anyNearby = true;
 				break;
@@ -65,8 +67,10 @@ public class PvpRadar {
 		boolean enemyBehindRight = false;
 
 		for (int i = 0, n = players.size(); i < n; i++) {
-			Player other = players.get(i);
+			net.minecraft.client.player.AbstractClientPlayer other = players.get(i);
 			if (other == self) continue;
+			// Серверні НПС не є гравцями — не показуємо їх на радарі.
+			if (!PlayerFilter.isRealPlayer(mc, other)) continue;
 			double dist = other.distanceTo(self);
 			if (dist > cfg.pvpRadarActivationDistance) continue;
 

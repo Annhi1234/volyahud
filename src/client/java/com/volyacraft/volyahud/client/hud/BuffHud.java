@@ -33,6 +33,14 @@ public class BuffHud {
 		if (mc.hitResult.getType() != HitResult.Type.ENTITY) return;
 		if (!(entityHit.getEntity() instanceof LivingEntity target)) return;
 		if (target == mc.player) return;
+		// Якщо ціль — "гравець", але серверний НПС (Citizens тощо), то
+		// таб-листа для нього немає — тож це не справжній гравець.
+		// Мобів (звичайний LivingEntity) фільтр не зачіпає: їхні бафи
+		// показувати корисно.
+		if (target instanceof net.minecraft.client.player.AbstractClientPlayer clientPlayer
+				&& !PlayerFilter.isRealPlayer(mc, clientPlayer)) {
+			return;
+		}
 
 		List<MobEffectInstance> effects = new ArrayList<>(target.getActiveEffects());
 		if (effects.isEmpty()) return;
