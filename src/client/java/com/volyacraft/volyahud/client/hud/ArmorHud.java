@@ -94,6 +94,7 @@ public class ArmorHud {
 	}
 
 	private static void drawSlot(GuiGraphics graphics, Minecraft mc, ItemStack stack, int x, int y) {
+		// Спочатку фон слота (щоб він точно був ПІД 3D-моделлю предмета).
 		HudStyle.mcSlot(graphics, x, y, SLOT);
 		if (stack.isEmpty()) return;
 
@@ -102,6 +103,10 @@ public class ArmorHud {
 		graphics.renderItem(stack, ix, iy);
 		graphics.renderItemDecorations(mc.font, stack, ix, iy);
 
+		// Після моделі — рамка слота (щоб 3D-броня її не перекривала) і
+		// відсоток міцності (який висуваємо на Z=200, щоб він був попереду).
+		graphics.flush();
+		HudStyle.mcSlotFrame(graphics, x, y, SLOT);
 		drawDurabilityOverlay(graphics, mc.font, stack, x, y, SLOT, SLOT);
 	}
 
@@ -121,16 +126,37 @@ public class ArmorHud {
 		int color = percent > 50 ? 0x55FF55 : percent > 20 ? 0xFFFF55 : 0xFF5555;
 		String text = percent + "%";
 
+		// ГАРАНТІЯ ПОРЯДКУ: у Minecraft 1.21+ `GuiGraphics#renderItem` малює
+		// 3D-модель предмета через BufferSource і ВИКЛИКАЄ flush() — тобто
+		// спочатку спорожнює буфер, а потім додає туди модель. Наша підкладка
+		// й текст (які теж йдуть у той самий буфер) опинялися в ньому
+		// РАНІШЕ за іконку — і буршер малював їх першими, а 3D-модель
+		// броні — поверх. Через це відсоток міцності просто зникав під
+		// іконкою ("воно під бронею").
+		//
+		// Розв'язання: спочатку малюємо іконку предмета (це вже зроблено
+		// вище), потім flush(), і лише після цього — підкладку та цифру.
+		graphics.flush();
+
 		// зменшуємо шрифт, тільки якщо текст не влазить у ширину слота
 		int textW = font.width(text);
 		float fontScale = textW > w - 2 ? (w - 2f) / textW : 1f;
+		int scaledW = Math.round(textW * fontScale);
 
 		graphics.pose().pushPose();
-		int tx = x + w - Math.round(textW * fontScale) - 1;
+		int tx = x + w - scaledW - 1;
 		int ty = y + h - 9;
-		graphics.pose().translate(tx, ty, 0);
+		// ВАЖЛИВО: Z = 200 — саме так ванільний лічильник предметів
+		// ("12") висуває текст перед 3D-моделлю. 3D-модель броні пише
+		// глибину в depth-буфер, тому на Z = 0 наша цифра просто
+		// залипала б УСЕРЕДИНІ броні (саме це і було "відсотки під
+		// бронею"). Зміщуючи текст на 200 ближче до камери, ми гарантуємо,
+		// що він малюється поверх.
+		graphics.pose().translate(tx, ty, 200.0f);
 		graphics.pose().scale(fontScale, fontScale, 1f);
-		graphics.fill(-1, -1, Math.round(textW * fontScale) + 1, 9, 0xA0000000);
+		// Підкладка — майже чорна й майже непрозора, щоб цифра читалася на
+		// будь-якій іконці (навіть на світлому шоломі чи броні).
+		graphics.fill(-1, -1, scaledW + 1, 9, 0xD0000000);
 		graphics.drawString(font, text, 0, 0, color, true);
 		graphics.pose().popPose();
 	}
@@ -345,6 +371,10 @@ public class ArmorHud {
 						int iconX = ix + (OTHER_SLOT - 16) / 2;
 						int iconY = armorY + (OTHER_SLOT - 16) / 2;
 						graphics.renderItem(stack, iconX, iconY);
+						// Рамка й % міцності — ПІСЛЯ 3D-моделі, щоб 3D-броня
+						// їх не перекривала (див. drawDurabilityOverlay).
+						graphics.flush();
+						HudStyle.mcSlotFrame(graphics, ix, armorY, OTHER_SLOT);
 						drawDurabilityOverlay(graphics, font, stack, ix, armorY, OTHER_SLOT, OTHER_SLOT);
 					}
 					ix += OTHER_SLOT;
@@ -371,6 +401,8 @@ public class ArmorHud {
 						int iconX = px + (OTHER_SLOT - 16) / 2;
 						int iconY = peekY + (OTHER_SLOT - 16) / 2;
 						graphics.renderItem(mainHand, iconX, iconY);
+						graphics.flush();
+						HudStyle.mcSlotFrame(graphics, px, peekY, OTHER_SLOT);
 						drawDurabilityOverlay(graphics, font, mainHand, px, peekY, OTHER_SLOT, OTHER_SLOT);
 						px += OTHER_SLOT + cellGap;
 					}
@@ -379,6 +411,8 @@ public class ArmorHud {
 						int iconX = px + (OTHER_SLOT - 16) / 2;
 						int iconY = peekY + (OTHER_SLOT - 16) / 2;
 						graphics.renderItem(offHand, iconX, iconY);
+						graphics.flush();
+						HudStyle.mcSlotFrame(graphics, px, peekY, OTHER_SLOT);
 						drawDurabilityOverlay(graphics, font, offHand, px, peekY, OTHER_SLOT, OTHER_SLOT);
 					}
 				}
