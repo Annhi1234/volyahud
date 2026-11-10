@@ -38,3 +38,9 @@ hs_err_*.log
 replay_*.log
 *.hprof
 *.jfr
+
+# logs from local test runs
+logs/
+
+# local verification harnesses (compiled manually, not part of the mod)
+verification/*.class

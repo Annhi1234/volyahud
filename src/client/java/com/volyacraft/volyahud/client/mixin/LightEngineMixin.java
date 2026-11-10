@@ -51,6 +51,19 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 @Mixin(LightEngine.class)
 public class LightEngineMixin {
 
+	/**
+	 * ОПТИМІЗАЦІЯ: {@code LightEngine#getState} викликається рушієм світла
+	 * для КОЖНОГО блоку, який він перевіряє (в найглибшому внутрішньому
+	 * циклі) — тобто потенційно десятки тисяч разів на перебудову секції
+	 * світла. Тому тут максимально дешева перевірка:
+	 * <ul>
+	 *   <li>спершу перевіряється сам рушій (найдешевший відсів — сонячне
+	 *       світло нас не цікавить);</li>
+	 *   <li>потім — чи є взагалі наше фейкове джерело (одне поле);</li>
+	 *   <li>і лише потім порівнюються координати — як примітиви, без
+	 *       створення об'єктів і без {@code BlockPos.equals}.</li>
+	 * </ul>
+	 */
 	@Inject(method = "getState", at = @At("HEAD"), cancellable = true)
 	private void volyahud$fakeHeldItemLight(BlockPos pos, CallbackInfoReturnable<BlockState> cir) {
 		// Тільки блочне світло: сонячний рушій uses іншу логіку і нам це не треба.
@@ -58,8 +71,18 @@ public class LightEngineMixin {
 			return;
 		}
 
+		// Швидка перевірка наявності джерела — без алокацій.
+		if (!DynamicLight.hasFakeLight()) {
+			return;
+		}
+
 		DynamicLight.FakeLight fake = DynamicLight.currentFakeLight();
-		if (fake == null || !fake.pos().equals(pos)) {
+		if (fake == null) {
+			return;
+		}
+
+		BlockPos fakePos = fake.pos();
+		if (fakePos.getX() != pos.getX() || fakePos.getY() != pos.getY() || fakePos.getZ() != pos.getZ()) {
 			return;
 		}
 

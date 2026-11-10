@@ -14,6 +14,9 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.lighting.LevelLightEngine;
 import net.minecraft.util.Mth;
 
+import java.util.HashMap;
+import java.util.Map;
+
 /**
  * СВІТЛО ВІД ПРЕДМЕТА В РУЦІ — без жодного "невидимого факела" у світі.
  *
@@ -48,6 +51,10 @@ public final class DynamicLight {
 
 	/** Поточне фейкове джерело (або null, якщо світла зараз немає). */
 	private static FakeLight current = null;
+	/** Вимір, у якому стоїть current — при переході не чіпаємо чужий light engine. */
+	private static String currentDimension = null;
+	/** Максимальна яскравість блоків за предметом (кеш, бо перебір станів недешевий). */
+	private static final Map<Item, Integer> LIGHT_LEVEL_CACHE = new HashMap<>();
 
 	/**
 	 * Кількість тіків між "підтвердженнями" світла. Сервер може пересилати
@@ -64,12 +71,38 @@ public final class DynamicLight {
 		return current;
 	}
 
+	/**
+	 * Чи є зараз фейкове джерело світла. Окремий метод — щоб mixin міг
+	 * відсіяти випадок "джерела немає" одним читанням поля, без
+	 * алокацій і без виклику {@code currentFakeLight()} (який повертає
+	 * посилання — теж дешево, але зайвий виклик у найгарячішому циклі
+	 * рушія світла).
+	 */
+	public static boolean hasFakeLight() {
+		return current != null;
+	}
+
 	/** Викликається раз на клієнтський тік з головного циклу VolyaHudClient. */
 	public static void tick(Minecraft mc) {
 		HudConfig cfg = HudConfig.INSTANCE;
 		LocalPlayer player = mc.player;
+		if (mc.level == null) {
+			current = null;
+			currentDimension = null;
+			return;
+		}
 
-		if (!cfg.heldItemDynamicLight || player == null || mc.level == null) {
+		// Зміна виміру не завжди супроводжується JOIN-подією. Старий
+		// FakeLight належить іншому light engine, тому його не можна
+		// "гасити" в новому вимірі — просто забуваємо.
+		String dimension = mc.level.dimension().location().toString();
+		if (!dimension.equals(currentDimension)) {
+			current = null;
+			currentDimension = dimension;
+			reassertTimer = 0;
+		}
+
+		if (!cfg.heldItemDynamicLight || player == null) {
 			clear(mc);
 			return;
 		}
@@ -136,8 +169,22 @@ public final class DynamicLight {
 	}
 
 	private static BlockState lightState(int level) {
-		return Blocks.LIGHT.defaultBlockState().setValue(LightBlock.LEVEL, Mth.clamp(level, 0, 15));
+		// ОПТИМІЗАЦІЯ: setValue() щоразу створює новий об'єкт BlockState.
+		// Рівнів світла всього 16, тож усі можливі стани готуємо один раз
+		// і далі просто беремо готовий — жодної алокації на кожну зміну
+		// світла (а змінюється воно щоразу, коли гравець переходить межу
+		// блоку).
+		int clamped = Mth.clamp(level, 0, 15);
+		BlockState cached = LIGHT_STATES[clamped];
+		if (cached == null) {
+			cached = Blocks.LIGHT.defaultBlockState().setValue(LightBlock.LEVEL, clamped);
+			LIGHT_STATES[clamped] = cached;
+		}
+		return cached;
 	}
+
+	/** Готові стани minecraft:light для рівнів 0..15. */
+	private static final BlockState[] LIGHT_STATES = new BlockState[16];
 
 	/**
 	 * Скидає внутрішній стан БЕЗ спроби погасити джерело — викликається при
@@ -147,6 +194,7 @@ public final class DynamicLight {
 	 */
 	public static void reset() {
 		current = null;
+		currentDimension = null;
 		reassertTimer = 0;
 	}
 
@@ -168,7 +216,17 @@ public final class DynamicLight {
 			return 14; // тотем не можна поставити — світить як факел
 		}
 		if (item instanceof BlockItem blockItem) {
-			return blockItem.getBlock().defaultBlockState().getLightEmission();
+			// defaultBlockState() недостатньо: у запаленого багаття,
+			// увімкненої редстоун-лампи чи ліхтаря інший стан, ніж дефолтний.
+			// Беремо максимум по всіх можливих станах блока (кешуємо на
+			// предмет, бо перебір станів недешевий).
+			return LIGHT_LEVEL_CACHE.computeIfAbsent(item, ignored -> {
+				int max = 0;
+				for (BlockState state : blockItem.getBlock().getStateDefinition().getPossibleStates()) {
+					max = Math.max(max, state.getLightEmission());
+				}
+				return max;
+			});
 		}
 		return 0;
 	}

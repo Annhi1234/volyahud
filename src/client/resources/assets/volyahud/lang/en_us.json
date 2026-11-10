@@ -6,5 +6,8 @@
   "key.volyahud.open_map": "Open full VolyaHUD map",
   "key.volyahud.toggle_hud": "Hide/show entire VolyaHUD",
   "key.volyahud.quick_waypoint": "Quickly drop a map waypoint",
+  "key.volyahud.copy_coords": "Copy current coordinates",
+  "key.volyahud.auto_deposit": "Auto-deposit into chest (Alt+F6)",
+  "key.volyahud.auto_collect": "Auto-collect from chest (Alt+F7)",
   "category.volyahud.general": "VolyaHUD"
 }

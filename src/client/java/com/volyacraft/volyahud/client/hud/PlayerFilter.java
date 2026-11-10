@@ -52,8 +52,6 @@ public final class PlayerFilter {
 		if (player == null) return false;
 		if (player == mc.player) return true; // це ти сам — гравцем звісно
 
-		refreshCache(mc);
-
 		// Якщо таб-лист порожній (одиночна гра, або сервер не надсилав
 		// жодного PlayerInfo) — не відсікаємо нікого, щоб не зламати HUD.
 		if (realPlayers.isEmpty()) {
@@ -63,8 +61,17 @@ public final class PlayerFilter {
 		return realPlayers.contains(player.getUUID());
 	}
 
-	/** Оновлює кеш UUID з таб-листа (раз на секунду). */
-	private static void refreshCache(Minecraft mc) {
+	/**
+	 * Оновлює кеш UUID з таб-листа. Викликається РАЗ НА ТІК (з
+	 * {@code VolyaHudClient}), а не з {@link #isRealPlayer}.
+	 *
+	 * <p>ОПТИМІЗАЦІЯ: раніше кеш оновлювався прямо з {@code isRealPlayer} —
+	 * а цей метод викликається для КОЖНОГО гравця в кадрі з трьох гарячих
+	 * циклів (броня/HP, PvP-радар, мінімапа). Тобто ми читали системний
+	 * годинник по N разів на кадр. Тепер оновлення йде з тіка — тобто
+	 * 20 разів на секунду замість сотень.
+	 */
+	public static void refresh(Minecraft mc) {
 		long now = System.currentTimeMillis();
 		if (now - cacheAtMs < CACHE_INTERVAL_MS) return;
 		cacheAtMs = now;

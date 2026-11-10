@@ -12,6 +12,7 @@ import com.volyacraft.volyahud.client.hud.CombatTimer;
 import com.volyacraft.volyahud.client.hud.DamageMeter;
 import com.volyacraft.volyahud.client.hud.DynamicLight;
 import com.volyacraft.volyahud.client.hud.FpsHud;
+import com.volyacraft.volyahud.client.hud.KeystrokesHud;
 import com.volyacraft.volyahud.client.hud.OverlayQueue;
 import com.volyacraft.volyahud.client.hud.PlayerFilter;
 import com.volyacraft.volyahud.client.hud.PearlTrajectory;
@@ -19,9 +20,11 @@ import com.volyacraft.volyahud.client.hud.PvpRadar;
 import com.volyacraft.volyahud.client.hud.TerritoryBorder;
 import com.volyacraft.volyahud.client.hud.TotemAlert;
 import com.volyacraft.volyahud.client.hud.minimap.ChunkColorCache;
+import com.volyacraft.volyahud.client.hud.minimap.MapDecorations;
 import com.volyacraft.volyahud.client.hud.minimap.MinimapHud;
 import com.volyacraft.volyahud.client.tooltip.WeaponDamageTooltip;
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.loader.api.FabricLoader;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientChunkEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
@@ -40,6 +43,13 @@ public class VolyaHudClient implements ClientModInitializer {
 
 	public static final String MOD_ID = "volyahud";
 	public static final Logger LOGGER = LoggerFactory.getLogger("VolyaHUD");
+
+	/** Версія з fabric.mod.json (єдине джерело правди — gradle.properties). */
+	public static String version() {
+		return FabricLoader.getInstance().getModContainer(MOD_ID)
+				.map(container -> container.getMetadata().getVersion().getFriendlyString())
+				.orElse("unknown");
+	}
 
 	/**
 	 * БАГ-ФІКС (важливий): раніше всі HUD-елементи малювались одним суцільним
@@ -81,6 +91,13 @@ public class VolyaHudClient implements ClientModInitializer {
 	private static KeyMapping openMapKey;
 	private static KeyMapping toggleHudKey;
 	private static KeyMapping quickWaypointKey;
+	private static KeyMapping copyCoordsKey;
+	private static KeyMapping autoDepositKey;
+	private static KeyMapping autoCollectKey;
+
+	/** Одноразова перевірка конфліктів клавіш після завантаження всіх модів. */
+	private static boolean keyConflictsChecked = false;
+	private static final java.util.Set<String> KEY_CONFLICTS = new java.util.LinkedHashSet<>();
 
 	/** Та сама палітра кольорів міток, що й у MapScreen — щоб швидкі мітки з клавіші виглядали так само, як поставлені вручну на карті. */
 	private static final int[] WAYPOINT_COLORS = {
@@ -94,9 +111,51 @@ public class VolyaHudClient implements ClientModInitializer {
 	 */
 	private static boolean hudHidden = false;
 
+	/** Стан "був мертвий" для одноразової мітки смерті. */
+	private static boolean wasDead = false;
+
+	/**
+	 * У Minecraft на одну фізичну клавішу може бути лише одне активне
+	 * KeyMapping: конфліктні прив'язки «крадуть» натискання одна в одної.
+	 * Перевіряємо це один раз після ініціалізації всіх модів, щоб у лог
+	 * потрапила конкретна пара, а не загадкове «клавіша не працює».
+	 */
+	/** Alt (лівий або правий) утримується — для комбінацій Alt+F6 / Alt+F7. */
+	private static boolean isAltDown(Minecraft mc) {
+		if (mc.getWindow() == null) return false;
+		long handle = mc.getWindow().getWindow();
+		return InputConstants.isKeyDown(handle, GLFW.GLFW_KEY_LEFT_ALT)
+				|| InputConstants.isKeyDown(handle, GLFW.GLFW_KEY_RIGHT_ALT);
+	}
+
+	private static void checkKeyConflicts(Minecraft mc) {
+		if (keyConflictsChecked || mc.options == null) return;
+		keyConflictsChecked = true;
+		KEY_CONFLICTS.clear();
+		KeyMapping[] own = {
+				openConfigKey, toggleChunkGridKey, toggleTerritoryKey, claimChunkKey,
+				openMapKey, toggleHudKey, quickWaypointKey, copyCoordsKey,
+				autoDepositKey, autoCollectKey
+		};
+		for (KeyMapping mine : own) {
+			if (mine == null || mine.isUnbound()) continue;
+			for (KeyMapping other : mc.options.keyMappings) {
+				if (other == mine || other.isUnbound()) continue;
+				if (other.saveString().equals(mine.saveString())) {
+					String pair = mine.getName() + " ↔ " + other.getName();
+					if (KEY_CONFLICTS.add(pair)) {
+						LOGGER.warn("VolyaHUD: клавіша '{}' для '{}' конфліктує з '{}'. "
+										+ "Призначте іншу клавішу в Controls → VolyaHUD.",
+								mine.saveString(), mine.getName(), other.getName());
+					}
+				}
+			}
+		}
+	}
+
 	@Override
 	public void onInitializeClient() {
-		LOGGER.info("VolyaHUD ініціалізовано");
+		LOGGER.info("VolyaHUD {} ініціалізовано", version());
 
 		// Тултип зброї: розрахунок реальної шкоди по HP (база + чари + крит).
 		WeaponDamageTooltip.register();
@@ -112,19 +171,19 @@ public class VolyaHudClient implements ClientModInitializer {
 				"category.volyahud.general"
 		));
 
-		// G — швидко увімкнути/вимкнути сітку меж чанка (для будівництва).
+		// [ — швидко увімкнути/вимкнути сітку меж чанка (для будівництва).
 		toggleChunkGridKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
 				"key.volyahud.toggle_chunk_grid",
 				InputConstants.Type.KEYSYM,
-				GLFW.GLFW_KEY_G,
+				GLFW.GLFW_KEY_LEFT_BRACKET,
 				"category.volyahud.general"
 		));
 
-		// H — швидко увімкнути/вимкнути показ кордону території ("міста").
+		// ] — швидко увімкнути/вимкнути показ кордону території ("міста").
 		toggleTerritoryKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
 				"key.volyahud.toggle_territory",
 				InputConstants.Type.KEYSYM,
-				GLFW.GLFW_KEY_H,
+				GLFW.GLFW_KEY_RIGHT_BRACKET,
 				"category.volyahud.general"
 		));
 
@@ -136,11 +195,11 @@ public class VolyaHudClient implements ClientModInitializer {
 				"category.volyahud.general"
 		));
 
-		// M — розгорнути повну карту (мінімапа й так завжди на екрані, якщо увімкнена).
+		// O — розгорнути повну карту (мінімапа й так завжди на екрані, якщо увімкнена).
 		openMapKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
 				"key.volyahud.open_map",
 				InputConstants.Type.KEYSYM,
-				GLFW.GLFW_KEY_M,
+				GLFW.GLFW_KEY_O,
 				"category.volyahud.general"
 		));
 
@@ -155,21 +214,54 @@ public class VolyaHudClient implements ClientModInitializer {
 				"category.volyahud.general"
 		));
 
-		// НОВА ФУНКЦІЯ: N — миттєво поставити мітку на карту прямо там, де
+		// НОВА ФУНКЦІЯ: B — миттєво поставити мітку на карту прямо там, де
 		// зараз стоїш, без відкриття повної карти. Назву можна змінити пізніше
-		// в меню карти (M) — тут головне швидкість, щоб не втрачати позицію,
+		// в меню карти (O) — тут головне швидкість, щоб не втрачати позицію,
 		// поки біжиш кудись у бою чи досліджуєш територію.
 		quickWaypointKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
 				"key.volyahud.quick_waypoint",
 				InputConstants.Type.KEYSYM,
-				GLFW.GLFW_KEY_N,
+				GLFW.GLFW_KEY_B,
+				"category.volyahud.general"
+		));
+
+		// I — скопіювати поточні координати у буфер обміну (X/Y/Z + вимір).
+		copyCoordsKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
+				"key.volyahud.copy_coords",
+				InputConstants.Type.KEYSYM,
+				GLFW.GLFW_KEY_I,
+				"category.volyahud.general"
+		));
+
+		// Alt+F6 / Alt+F7 — швидкі перемикачі режимів роботи зі скринею.
+		// Сама клавіша F6/F7 без Alt нічого не робить: у грі перевіряється
+		// модифікатор, щоб випадково не перемкнути режим під час бою.
+		// F6/F7 вибрані тому, що G/X уже зайняті Simple Voice Chat і
+		// ванільним Load Toolbar Activator — Minecraft лишає на одну
+		// фізичну клавішу лише одне активне KeyMapping.
+		autoDepositKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
+				"key.volyahud.auto_deposit",
+				InputConstants.Type.KEYSYM,
+				GLFW.GLFW_KEY_F6,
+				"category.volyahud.general"
+		));
+		autoCollectKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
+				"key.volyahud.auto_collect",
+				InputConstants.Type.KEYSYM,
+				GLFW.GLFW_KEY_F7,
 				"category.volyahud.general"
 		));
 
 		// Головний малюнок 2D HUD (броня, PvP-радар, бафи цілі).
 		HudRenderCallback.EVENT.register((graphics, tickDelta) -> {
 			Minecraft mc = Minecraft.getInstance();
-			if (mc.player == null || mc.options.hideGui || hudHidden) return;
+			if (mc.player == null || mc.options.hideGui || hudHidden) {
+				// F1/тимчасове приховування HUD: 2D-прохід не малює нічого, але
+				// 3D-прохід міг встигнути скласти записи. Якщо їх не прибрати,
+				// черга росте щокадру, поки HUD прихований.
+				OverlayQueue.drain();
+				return;
+			}
 			HudConfig cfg = HudConfig.INSTANCE;
 
 			if (cfg.ownArmorHud) {
@@ -182,6 +274,7 @@ public class VolyaHudClient implements ClientModInitializer {
 				safe("Броня/HP інших гравців", () -> ArmorHud.drawQueuedOverlays(graphics, mc));
 			} else {
 				OverlayQueue.drain(); // не залишаємо старі записи в черзі, якщо фіча вимкнена
+				ArmorHud.reset();
 			}
 			if (cfg.pvpRadar) {
 				safe("PvP-радар", () -> PvpRadar.render(graphics, mc));
@@ -192,8 +285,12 @@ public class VolyaHudClient implements ClientModInitializer {
 			if (cfg.totemAlert) {
 				safe("Сповіщення про тотем", () -> TotemAlert.render(graphics, mc));
 			}
-			if (cfg.showFps || cfg.showCoordX || cfg.showCoordY || cfg.showCoordZ || cfg.showChunkCoords || cfg.showCompass || cfg.combatTimer) {
+			if (cfg.showFps || cfg.showCoordX || cfg.showCoordY || cfg.showCoordZ || cfg.showChunkCoords
+					|| cfg.showCompass || cfg.showPing || cfg.combatTimer) {
 				safe("Інфо-панель", () -> FpsHud.render(graphics, mc));
+			}
+			if (cfg.keystrokesHud) {
+				safe("Клавіші/CPS", () -> KeystrokesHud.render(graphics, mc));
 			}
 			if (cfg.damageMeter) {
 				safe("Реальна шкода (крит)", () -> DamageMeter.render(graphics, mc));
@@ -208,7 +305,10 @@ public class VolyaHudClient implements ClientModInitializer {
 		// сітка меж чанка та кордон позначеної території.
 		WorldRenderEvents.AFTER_ENTITIES.register(context -> {
 			Minecraft mc = Minecraft.getInstance();
-			if (mc.player == null || hudHidden) return;
+			if (mc.player == null || mc.options.hideGui || hudHidden) {
+				OverlayQueue.drain();
+				return;
+			}
 			HudConfig cfg = HudConfig.INSTANCE;
 
 			if (cfg.otherPlayersArmorHud || cfg.healthTags || cfg.inventoryPeek) {
@@ -222,9 +322,10 @@ public class VolyaHudClient implements ClientModInitializer {
 		});
 
 		ClientTickEvents.END_CLIENT_TICK.register(mc -> {
+			checkKeyConflicts(mc);
 			// БАГ-ФІКС: KeyMapping у ваніли реагує на "сирий" GLFW-івент клавіші
 			// незалежно від того, чи відкритий екран чату/інвентаря — тобто
-			// набираючи в чаті повідомлення з літерами g/h/j/k/m чи крапкою,
+			// набираючи в чаті повідомлення з літерами b/i/j/k/o, дужками чи крапкою,
 			// гравець мимоволі смикав ці ж самі гарячі клавіші VolyaHUD.
 			// Тепер усі перемикачі спрацьовують лише тоді, коли жоден екран
 			// не відкритий (те саме правило, що вже й так діяло для openMapKey).
@@ -257,9 +358,10 @@ public class VolyaHudClient implements ClientModInitializer {
 				if (!noScreen) continue;
 				if (mc.player != null && mc.level != null) {
 					String dim = mc.level.dimension().location().toString();
+					String world = currentWorldKey(mc);
 					int cx = Mth.floor(mc.player.getX()) >> 4;
 					int cz = Mth.floor(mc.player.getZ()) >> 4;
-					boolean added = TerritoryManager.toggle(dim, cx, cz);
+					boolean added = TerritoryManager.toggle(world, dim, cx, cz);
 					mc.player.displayClientMessage(Component.literal(
 							added ? "§aЧанк додано до твоєї території" : "§cЧанк прибрано з території"), true);
 				}
@@ -283,32 +385,87 @@ public class VolyaHudClient implements ClientModInitializer {
 					HudConfig cfg = HudConfig.INSTANCE;
 					String dim = mc.level.dimension().location().toString();
 					java.util.List<HudConfig.Waypoint> list = cfg.waypointsFor(dim);
-					int color = WAYPOINT_COLORS[list.size() % WAYPOINT_COLORS.length];
-					String name = "Мітка " + (list.size() + 1);
-					list.add(new HudConfig.Waypoint(name,
+					String world = currentWorldKey(mc);
+					int visibleCount = cfg.countVisibleWaypoints(dim, world);
+					int color = WAYPOINT_COLORS[visibleCount % WAYPOINT_COLORS.length];
+					String name = cfg.nextWaypointName(dim, world);
+					HudConfig.Waypoint wp = new HudConfig.Waypoint(name,
 							Mth.floor(mc.player.getX()), Mth.floor(mc.player.getY()), Mth.floor(mc.player.getZ()),
-							color));
+							color);
+					wp.world = world;
+					list.add(wp);
 					cfg.save();
 					mc.player.displayClientMessage(Component.literal(
-							"§a\u2691 Мітку \"" + name + "\" додано на карту. Перейменувати можна в меню карти (M)."), true);
+							"§a\u2691 Мітку \"" + name + "\" додано на карту. Перейменувати можна в меню карти (O)."), true);
 				}
 			}
+			while (copyCoordsKey.consumeClick()) {
+				if (!noScreen) continue;
+				if (mc.player != null && mc.level != null) {
+					String dim = mc.level.dimension().location().toString();
+					String text = "X: " + Mth.floor(mc.player.getX())
+							+ ", Y: " + Mth.floor(mc.player.getY())
+							+ ", Z: " + Mth.floor(mc.player.getZ())
+							+ " [" + dim + "]";
+					mc.keyboardHandler.setClipboard(text);
+					mc.player.displayClientMessage(Component.literal(
+							"§aКоординати скопійовано: §f" + text), false);
+				}
+			}
+			while (autoDepositKey.consumeClick()) {
+				if (!noScreen || !isAltDown(mc)) continue;
+				HudConfig cfg = HudConfig.INSTANCE;
+				cfg.bulkChestTransfer = !cfg.bulkChestTransfer;
+				cfg.save();
+				if (mc.player != null) {
+					mc.player.displayClientMessage(Component.literal(
+							cfg.bulkChestTransfer
+									? "§bАвто-закид у скриню: §aувімк §7(Alt+F6)"
+									: "§bАвто-закид у скриню: §cвимк §7(Alt+F6)"), true);
+				}
+			}
+			while (autoCollectKey.consumeClick()) {
+				if (!noScreen || !isAltDown(mc)) continue;
+				HudConfig cfg = HudConfig.INSTANCE;
+				cfg.bulkChestWithdraw = !cfg.bulkChestWithdraw;
+				cfg.save();
+				if (mc.player != null) {
+					mc.player.displayClientMessage(Component.literal(
+							cfg.bulkChestWithdraw
+									? "§bАвто-збір зі скрині: §aувімк §7(Alt+F7)"
+									: "§bАвто-збір зі скрині: §cвимк §7(Alt+F7)"), true);
+				}
+			}
+			// Автоматична мітка смерті: спрацьовує один раз на перехід
+			// "живий -> мертвий", поки гравець ще лежить на місці смерті.
+			if (mc.player != null && mc.level != null) {
+				boolean dead = mc.player.isDeadOrDying();
+				if (dead && !wasDead && HudConfig.INSTANCE.deathWaypoint) {
+					addDeathWaypoint(mc);
+				}
+				wasDead = dead;
+			} else {
+				wasDead = false;
+			}
 			safe("Тік траєкторії кидка", () -> PearlTrajectory.tick(mc));
-			if (HudConfig.INSTANCE.combatTimer) {
-				safe("Тік таймера бою", () -> CombatTimer.tick(mc));
-			}
-			if (HudConfig.INSTANCE.totemAlert) {
-				safe("Тік сповіщення про тотем", () -> TotemAlert.tick(mc));
-			}
+			// Ці три тіки навмисно виконуються ЗАВЖДИ, а не лише коли
+			// відповідний HUD увімкнений: інакше після вимкнення тумблера
+			// всередині бою в стані лишалися старі таймери/події, і після
+			// повторного вмикання вони "вистрибували" на екран.
+			safe("Тік таймера бою", () -> CombatTimer.tick(mc));
+			safe("Тік сповіщення про тотем", () -> TotemAlert.tick(mc));
+			safe("Тік реальної шкоди", () -> DamageMeter.tick(mc));
 			safe("Тік мінімапи", () -> MinimapHud.tick(mc));
+			// ОПТИМІЗАЦІЯ: кеш таб-листа оновлюємо РАЗ НА ТІК, а не з
+			// isRealPlayer() (який викликається для кожного гравця в кадрі
+			// з трьох гарячих циклів) — тож системний годинник більше не
+			// читається N разів на кадр.
+			PlayerFilter.refresh(mc);
 			// НОВА ФУНКЦІЯ: динамічне світло від факела/ліхтаря/тотема в руці.
 			// Тік виконується завжди (а не лише коли тумблер увімкнений), бо
 			// саме тут же й ховається логіка "прибрати фейковий блок назад",
 			// якщо тумблер вимкнули просто посеред гри.
 			safe("Динамічне світло від предмета в руці", () -> DynamicLight.tick(mc));
-			if (HudConfig.INSTANCE.damageMeter) {
-				safe("Тік реальної шкоди", () -> DamageMeter.tick(mc));
-			}
 
 			mapAutosaveTimer++;
 			if (mapAutosaveTimer >= MAP_AUTOSAVE_INTERVAL_TICKS) {
@@ -324,18 +481,43 @@ public class VolyaHudClient implements ClientModInitializer {
 		// Прив'язуємо збережену карту до конкретного світу (одиночна гра чи сервер),
 		// щоб мапа з одного сервера не змішувалась із мапою іншого.
 		ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
+			checkKeyConflicts(client);
+			if (!KEY_CONFLICTS.isEmpty() && client.player != null) {
+				client.player.displayClientMessage(Component.literal(
+						"§e[VolyaHUD] Конфлікт клавіш: §f" + String.join("; ", KEY_CONFLICTS)
+								+ "§e. Перепризнач у Controls → VolyaHUD."), false);
+			}
 			ChunkColorCache.loadWorld(currentWorldKey(client));
 			FAILED.clear(); // даємо елементам, які раніше зламались, новий шанс на новому заході в гру
 			// Старий ClientLevel більше не існує — скидаємо стан динамічного
 			// світла без спроби повернути блок у ньому (і так уже нема куди).
 			DynamicLight.reset();
+			// Кеш спрайтів маркерів карти скидаємо — атлас декорацій міг
+			// перезавантажитися (наприклад, після зміни ресурсів).
+			MapDecorations.reset();
 			// Кеш таб-листа (для відсіювання серверних НПС) скидаємо —
 			// новий сервер має інший склад гравців.
 			PlayerFilter.reset();
+			OverlayQueue.clear();
+			ArmorHud.reset();
+			PearlTrajectory.reset();
+			// Стан "тимчасових" HUD-подій не має переїжджати зі старого світу.
+			CombatTimer.reset();
+			TotemAlert.clear();
+			DamageMeter.reset();
+			// Старі позначки території зберігали лише вимір. При першому вході
+			// після оновлення прив'язуємо їх до цього світу, щоб вони більше
+			// не з'являлися на інших серверах.
+			TerritoryManager.migrateLegacy(currentWorldKey(client));
+			// Кеш кордону території міг лишитися з попереднього сервера з тими
+			// самими координатами/кількістю чанків — примусово перебудуємо.
+			TerritoryManager.bumpRevision();
 			// Приховування HUD — тимчасове, на одну сесію: після перезаходу в
 			// гру показуємо його знову, щоб гравець не лишився з порожнім
 			// екраном і не зрозумів, що мод зламався.
 			hudHidden = false;
+			wasDead = false;
+			KeystrokesHud.reset();
 		});
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
 			// Тут (на відміну від періодичного автозбереження на тіку) навмисно
@@ -343,15 +525,51 @@ public class VolyaHudClient implements ClientModInitializer {
 			// непомітна, а нам критично важливо, щоб файл дописався ДО того, як
 			// зникне рівень/сесія (фоновий потік міг би просто не встигнути).
 			ChunkColorCache.saveWorldBlocking();
+			OverlayQueue.clear();
+			ArmorHud.reset();
+			PearlTrajectory.reset();
 			DynamicLight.reset();
+			CombatTimer.reset();
+			TotemAlert.clear();
+			DamageMeter.reset();
+			wasDead = false;
+			KeystrokesHud.reset();
+			// Звільняємо GPU-текстуру рельєфу мінімапи — інакше вона жила б
+			// далі в пам'яті до кінця гри.
+			MinimapHud.releaseTexture();
 		});
 	}
 
 	private static int mapAutosaveTimer = 0;
 	private static final int MAP_AUTOSAVE_INTERVAL_TICKS = 20 * 30; // раз на ~30 секунд
 
+	/**
+	 * Додає (або замінює попередню) мітку смерті в поточному вимірі/світі.
+	 * Стара мітка смерті того самого світу прибирається, щоб на карті не
+	 * накопичувався десяток черепів після кожного респавну.
+	 */
+	private static void addDeathWaypoint(Minecraft mc) {
+		HudConfig cfg = HudConfig.INSTANCE;
+		String dim = mc.level.dimension().location().toString();
+		String world = currentWorldKey(mc);
+		java.util.List<HudConfig.Waypoint> list = cfg.waypointsFor(dim);
+		list.removeIf(w -> w != null && w.deathMarker && java.util.Objects.equals(w.world, world));
+
+		HudConfig.Waypoint wp = new HudConfig.Waypoint("☠ Смерть",
+				Mth.floor(mc.player.getX()), Mth.floor(mc.player.getY()), Mth.floor(mc.player.getZ()),
+				0xFF5555);
+		wp.world = world;
+		wp.deathMarker = true;
+		list.add(wp);
+		cfg.save();
+		if (mc.player != null) {
+			mc.player.displayClientMessage(Component.literal(
+					"§c☠ Мітку смерті додано на карту."), true);
+		}
+	}
+
 	/** Ідентифікатор поточного "світу" для збереження карти: адреса сервера або назва одиночної гри. */
-	private static String currentWorldKey(Minecraft mc) {
+	public static String currentWorldKey(Minecraft mc) {
 		if (mc.getCurrentServer() != null) {
 			return "server_" + mc.getCurrentServer().ip;
 		}

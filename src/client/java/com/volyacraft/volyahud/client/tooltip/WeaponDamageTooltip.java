@@ -8,8 +8,10 @@ import net.minecraft.core.component.DataComponents;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.resources.ResourceKey;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.RandomSource;
-import net.minecraft.world.entity.EquipmentSlotGroup;
+import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.entity.ai.attributes.AttributeInstance;
 import net.minecraft.world.entity.ai.attributes.AttributeModifier;
 import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.player.Player;
@@ -24,7 +26,9 @@ import net.minecraft.world.item.enchantment.ItemEnchantments;
 import net.minecraft.world.item.enchantment.effects.EnchantmentValueEffect;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Дописує в тултип зброї (наведення курсором в інвентарі) РОЗРАХОВАНУ
@@ -41,8 +45,11 @@ import java.util.List;
  *  - Sharpness/Smite/Bane of Arthropods ТА будь-які кастомні зачарування
  *    (зокрема ExcellentEnchants), що впливають на шкоду — див. коментар над
  *    {@link #applyEnchantDamageEffects};
- *  - критичний удар показується ОКРЕМИМ числом (×1.5 від підсумкового урону
- *    удару, як і в ваніли).
+ *  - критичний удар — ОКРЕМИМ числом, за ТОЧНОЮ формулою ванільного
+ *    {@code Player#attack} (Minecraft 1.21.4): спершу множиться на 1.5
+ *    базова шкода, а бонус від зачарувань додається вже ПІСЛЯ крита.
+ *    Тому «(база + чари) × 1.5» — неправильно (див. коментар у
+ *    {@link #computeLines}).
  *
  * ВАЖЛИВО: це теоретичне число проти цілі БЕЗ броні/ефектів опору — тултип
  * інвентаря фізично не може знати, у що вдягнена ціль, тому чесно про це
@@ -57,6 +64,35 @@ public final class WeaponDamageTooltip {
 		ItemTooltipCallback.EVENT.register(WeaponDamageTooltip::onTooltip);
 	}
 
+	/**
+	 * ОПТИМІЗАЦІЯ (буквально найдорожче місце в моді): тултип предмета
+	 * викликається НЕ один раз при наведенні, а ЩОКАДРУ — ванільний
+	 * {@code AbstractContainerScreen#renderTooltip} перебирає тултипи
+	 * кожного кадру, поки курсор стоїть на слоті. Тому раніше весь
+	 * розрахунок шкоди (перебір усіх зачарувань, створення Component'ів,
+	 * форматування чисел) виконувався 60-360 разів на секунду для
+	 * ІДЕНТИЧНОГО результату.
+	 *
+	 * <p>Тепер результат кешується: перераховуємо його лише тоді, коли
+	 * реально змінилосьось із того, від чого він залежить — сам предмет
+	 * (його зачарування/модифікатори), предмет у руці або атрибут сили
+	 * гравця. Інакше просто додаємо вже готові рядки з кешу.
+	 *
+	 * <p>БАГ-ФІКС: раніше порівнювався ЛИШЕ посилання на стек
+	 * ({@code cachedStack == stack}). Якщо гра давала новий екземпляр
+	 * {@link ItemStack} з тими самими компонентами (а це звичайна справа
+	 * для тултипів у деяких меню), кеш скидався щокадру; з іншого боку,
+	 * зміна зачарування/предмета в руці при незмінному посиланні могла
+	 * залишити СТАРЕ число. Тепер порівнюються компоненти стека, живий
+	 * атрибут і предмет у руці.
+	 */
+	private static ItemStack cachedStack = ItemStack.EMPTY;
+	private static ItemStack cachedMainhand = ItemStack.EMPTY;
+	private static float cachedAttackDamage = Float.NaN;
+	private static List<Component> cachedLines = List.of();
+	/** Чи вже сталася помилка — щоб не писати її в лог щокадру. */
+	private static boolean failed = false;
+
 	private static void onTooltip(ItemStack stack, Item.TooltipContext context, TooltipFlag type, List<Component> lines) {
 		if (!HudConfig.INSTANCE.weaponDamageTooltip) return;
 
@@ -65,86 +101,187 @@ public final class WeaponDamageTooltip {
 		if (player == null) return;
 
 		try {
-			float hoveredWeaponDamage = mainhandAttackDamage(stack);
-			if (hoveredWeaponDamage <= 0f) return; // не зброя (немає власного attack_damage) — тултип не чіпаємо
+			// Не зброя (немає жодного впливу на attack_damage у руці) —
+			// тултип не чіпаємо.
+			if (!hasMainhandAttackDamage(stack)) return;
 
-			float baseDamage = calculateBaseDamage(player, stack, hoveredWeaponDamage);
+			// Живе значення атрибута вже враховує Силу/Слабкість/ефекти, тож
+			// воно — саме те, що змінює результат між кадрами.
+			float liveAttack = (float) player.getAttributeValue(Attributes.ATTACK_DAMAGE);
+			ItemStack mainhand = player.getMainHandItem();
 
-			List<EnchantContribution> breakdown = new ArrayList<>();
-			float totalDamageRaw = applyEnchantDamageEffects(stack, baseDamage, breakdown);
-			float totalDamage = Math.max(0f, totalDamageRaw);
-			float critDamage = totalDamage * 1.5f;
-
-			lines.add(Component.literal(""));
-			lines.add(Component.literal("\u00A76\u2694 VolyaHUD \u2014 \u0440\u0435\u0430\u043B\u044C\u043D\u0430 \u0448\u043A\u043E\u0434\u0430"));
-			if (!breakdown.isEmpty()) {
-				lines.add(Component.literal("\u00A77\u0411\u0430\u0437\u0430 \u0437\u0431\u0440\u043E\u0457: \u00A7f" + fmt(baseDamage)));
-				// Розбивка по кожному зачарюванню, що реально вплинуло на шкоду —
-				// показуємо назву (з рівнем, як у ваніли), внесок і, якщо чар не
-				// ванільний (інший namespace — напр. ExcellentEnchants), позначку
-				// "(мод)", щоб було видно, що саме звідти прийшов бонус.
-				for (EnchantContribution entry : breakdown) {
-					String sign = entry.contribution() >= 0f ? "+" : "";
-					Component name = Enchantment.getFullname(entry.holder(), entry.level());
-					// БАГ-ФІКС (не компілювалось): якщо оголосити змінну як Component,
-					// компілятор бачить лише інтерфейс Component, у якому НЕМАЄ методу
-					// append() (він є лише в MutableComponent, який реально повертає
-					// Component.literal(...)). Через це подальший виклик line.append(...)
-					// нижче не знаходив символ. MutableComponent — правильний тип тут.
-					MutableComponent line = Component.literal("  \u00A77").append(name)
-							.append(Component.literal(" \u00A7f" + sign + fmt(entry.contribution()) + "\u00A77"));
-					if (!isVanilla(entry.holder())) {
-						line = line.append(Component.literal(" (\u043C\u043E\u0434)"));
-					}
-					lines.add(line);
-				}
+			boolean upToDate = ItemStack.isSameItemSameComponents(cachedStack, stack)
+					&& ItemStack.isSameItemSameComponents(cachedMainhand, mainhand)
+					&& cachedAttackDamage == liveAttack;
+			if (!upToDate) {
+				cachedLines = computeLines(player, stack);
+				cachedStack = stack.copy();
+				// Копія, а не посилання: компоненти ItemStack можуть
+				// змінюватися на місці, і тоді старий кеш більше не
+				// відповідав би поточній зброї в руці.
+				cachedMainhand = mainhand.copy();
+				cachedAttackDamage = liveAttack;
 			}
-			lines.add(Component.literal("\u00A77\u0417\u0432\u0438\u0447\u0430\u0439\u043D\u0438\u0439 \u0443\u0434\u0430\u0440: \u00A7a"
-					+ fmt(totalDamage) + " \u0425\u041F"));
-			lines.add(Component.literal("\u00A77\u041A\u0440\u0438\u0442\u0438\u0447\u043D\u0438\u0439 \u0443\u0434\u0430\u0440: \u00A7c"
-					+ fmt(critDamage) + " \u0425\u041F"));
-			lines.add(Component.literal("\u00A78(\u0431\u0435\u0437 \u0443\u0440\u0430\u0445\u0443\u0432\u0430\u043D\u043D\u044F \u0431\u0440\u043E\u043D\u0456/\u043E\u043F\u043E\u0440\u0443 \u0446\u0456\u043B\u0456)"));
+			lines.addAll(cachedLines);
 		} catch (Throwable t) {
-			VolyaHudClient.LOGGER.error("VolyaHUD: не вдалось порахувати шкоду для тултипа предмета '{}'", stack, t);
+			// БАГ-ФІКС: раніше стек-трейс писався в лог ЩОКАДРУ (якщо щось
+			// падало) — тобто в лог летіли сотні однакових помилок на
+			// секунду. Тепер пишемо один раз.
+			if (!failed) {
+				failed = true;
+				VolyaHudClient.LOGGER.error("VolyaHUD: не вдалось порахувати шкоду для тултипа предмета '{}'", stack, t);
+			}
 		}
+	}
+
+	/** Будує рядки тултипа (повний розрахунок). */
+	private static List<Component> computeLines(Player player, ItemStack stack) {
+		List<Component> lines = new ArrayList<>();
+
+		float baseDamage = Math.max(0f, calculateBaseDamage(player, stack));
+
+		// ТОЧНА формула ванільного Player#attack (Minecraft 1.21.4,
+		// перевірено за байткодом):
+		//
+		//   base      = ATTACK_DAMAGE (зброя + Сила/Слабкість + інші ефекти)
+		//   enchanted = зачарування_DAMAGE(base)
+		//   extra     = enchanted - base          <- бонус зачарувань
+		//   normal    = base + extra
+		//   crit      = base * 1.5 + extra
+		//
+		// Тобто крит множить ЛИШЕ базову шкоду, а Sharpness/Smite та інші
+		// DAMAGE-ефекти додаються вже після крита. Попередня версія робила
+		// (base + extra) * 1.5 — це завищувало крит на 0.5 * extra.
+		List<EnchantContribution> breakdown = new ArrayList<>();
+		float enchanted = applyEnchantDamageEffects(stack, baseDamage, breakdown);
+		float enchantBonus = enchanted - baseDamage;
+		float totalDamage = Math.max(0f, enchanted);
+		float critDamage = Math.max(0f, baseDamage * 1.5f + enchantBonus);
+
+		lines.add(Component.literal(""));
+		lines.add(Component.literal("\u00A76\u2694 VolyaHUD \u2014 \u0440\u0435\u0430\u043B\u044C\u043D\u0430 \u0448\u043A\u043E\u0434\u0430"));
+		if (!breakdown.isEmpty()) {
+			lines.add(Component.literal("\u00A77\u0411\u0430\u0437\u0430 \u0437\u0431\u0440\u043E\u0457: \u00A7f" + fmt(baseDamage)));
+			// Розбивка по кожному зачарюванню, що реально вплинуло на шкоду —
+			// показуємо назву (з рівнем, як у ваніли), внесок і, якщо чар не
+			// ванільний (інший namespace — напр. ExcellentEnchants), позначку
+			// "(мод)", щоб було видно, що саме звідти прийшов бонус.
+			for (EnchantContribution entry : breakdown) {
+				String sign = entry.contribution() >= 0f ? "+" : "";
+				Component name = Enchantment.getFullname(entry.holder(), entry.level());
+				// БАГ-ФІКС (не компілювалось): якщо оголосити змінну як Component,
+				// компілятор бачить лише інтерфейс Component, у якому НЕМАЄ методу
+				// append() (він є лише в MutableComponent, який реально повертає
+				// Component.literal(...)). Через це подальший виклик line.append(...)
+				// нижче не знаходив символ. MutableComponent — правильний тип тут.
+				MutableComponent line = Component.literal("  \u00A77").append(name)
+						.append(Component.literal(" \u00A7f" + sign + fmt(entry.contribution()) + "\u00A77"));
+				if (!isVanilla(entry.holder())) {
+					line = line.append(Component.literal(" (\u043C\u043E\u0434)"));
+				}
+				lines.add(line);
+			}
+		}
+		lines.add(Component.literal("\u00A77\u0417\u0432\u0438\u0447\u0430\u0439\u043D\u0438\u0439 \u0443\u0434\u0430\u0440: \u00A7a"
+				+ fmt(totalDamage) + " \u0425\u041F"));
+		lines.add(Component.literal("\u00A77\u041A\u0440\u0438\u0442\u0438\u0447\u043D\u0438\u0439 \u0443\u0434\u0430\u0440: \u00A7c"
+				+ fmt(critDamage) + " \u0425\u041F"));
+		lines.add(Component.literal("\u00A78(\u043f\u043e\u0432\u043d\u0438\u0439 \u0437\u0430\u0440\u044f\u0434; \u0431\u0435\u0437 \u0443\u0440\u0430\u0445\u0443\u0432\u0430\u043d\u043d\u044f \u0431\u0440\u043e\u043d\u0456/\u043e\u043f\u043e\u0440\u0443 \u0446\u0456\u043b\u0456)"));
+
+		return List.copyOf(lines);
 	}
 
 	/**
-	 * "Що показувало б F3+H / атрибут ATTACK_DAMAGE, якби зараз у руці був
-	 * саме цей наведений предмет" — беремо ЖИВЕ значення атрибута гравця
-	 * (у ньому вже враховані Сила/Слабкість/інші активні модифікатори й
-	 * поточна зброя в руці), знімаємо внесок ПОТОЧНОЇ зброї в руці і додаємо
-	 * внесок НАВЕДЕНОГО предмета замість неї. Решта (базове значення 1.0
-	 * "кулаком" + Сила/Слабкість) лишається такою, як є в живого гравця —
-	 * саме так враховуються "характеристики гравця".
+	 * «Яке було б значення ATTACK_DAMAGE, якби зараз у руці був саме цей
+	 * наведений предмет» — з усіма поточними ефектами гравця (Сила,
+	 * Слабкість, модифікатори броні/аксесуарів), але з ПІДМІНОЮ внеску
+	 * поточної зброї на внесок наведеної.
 	 *
-	 * Спрощення: припускаємо, що всі відповідні модифікатори — адитивні
-	 * (ADD_VALUE), як і є у ваніли для attack_damage (сама зброя, Сила,
-	 * Слабкість). Якщо якийсь інший мод додасть МНОЖНИЙ модифікатор на цей
-	 * атрибут, підміна порахує трохи неточно — прийнятний компроміс для
-	 * тултипа "орієнтовної" шкоди.
+	 * <p>БАГ-ФІКС: раніше враховувалися лише {@code ADD_VALUE}-модифікатори
+	 * й віднімався «сирий» внесок поточної зброї. Якщо інший мод додавав
+	 * {@code ADD_MULTIPLIED_BASE}/{@code ADD_MULTIPLIED_TOTAL} (або зброя
+	 * мала кілька операцій), результат був неправильним.
+	 *
+	 * <p>Тепер значення збирається з нуля за ТОЧНИМ порядком ванільного
+	 * {@code AttributeInstance#calculateValue}:
+	 * <ol>
+	 *   <li>базове значення + усі ADD_VALUE (крім модифікаторів поточної
+	 *       зброї — їх замінюємо);</li>
+	 *   <li>+ (значення після ADD_VALUE) × сума ADD_MULTIPLIED_BASE;</li>
+	 *   <li>× (1 + amount) для кожного ADD_MULTIPLIED_TOTAL.</li>
+	 * </ol>
+	 * Модифікатори наведеного предмета додаються в ті самі три кошики, тому
+	 * підсумок збігається з тим, що гра порахувала б із цим предметом у руці.
 	 */
-	private static float calculateBaseDamage(Player player, ItemStack hoveredStack, float hoveredWeaponDamage) {
-		float liveAttack = (float) player.getAttributeValue(Attributes.ATTACK_DAMAGE);
-		float currentWeaponDamage = mainhandAttackDamage(player.getMainHandItem());
-		return liveAttack - currentWeaponDamage + hoveredWeaponDamage;
-	}
+	private static float calculateBaseDamage(Player player, ItemStack hoveredStack) {
+		AttributeInstance instance = player.getAttribute(Attributes.ATTACK_DAMAGE);
+		if (instance == null) return 0f;
 
-	/** Сума ADD_VALUE-модифікаторів attack_damage предмета для слоту "основна рука" (0, якщо предмет не зброя). */
-	private static float mainhandAttackDamage(ItemStack stack) {
-		if (stack == null || stack.isEmpty()) return 0f;
-		ItemAttributeModifiers mods = stack.get(DataComponents.ATTRIBUTE_MODIFIERS);
-		if (mods == null) return 0f;
-
-		float sum = 0f;
-		for (ItemAttributeModifiers.Entry entry : mods.modifiers()) {
-			if (entry.slot() != EquipmentSlotGroup.MAINHAND) continue;
-			if (entry.attribute().value() != Attributes.ATTACK_DAMAGE.value()) continue;
-			if (entry.modifier().operation() == AttributeModifier.Operation.ADD_VALUE) {
-				sum += (float) entry.modifier().amount();
+		// ID модифікаторів поточної зброї в руці — саме їх треба прибрати
+		// перед підстановкою наведеного предмета.
+		Set<ResourceLocation> replacedIds = new HashSet<>();
+		ItemAttributeModifiers currentModifiers =
+				player.getMainHandItem().get(DataComponents.ATTRIBUTE_MODIFIERS);
+		if (currentModifiers != null) {
+			for (ItemAttributeModifiers.Entry entry : currentModifiers.modifiers()) {
+				if (!entry.slot().test(EquipmentSlot.MAINHAND)) continue;
+				if (entry.attribute().value() != Attributes.ATTACK_DAMAGE.value()) continue;
+				replacedIds.add(entry.modifier().id());
 			}
 		}
-		return sum;
+
+		double base = instance.getBaseValue();
+		double addValue = 0.0;
+		double multipliedBase = 0.0;
+		List<Double> multipliedTotal = new ArrayList<>(2);
+
+		for (AttributeModifier modifier : instance.getModifiers()) {
+			if (replacedIds.contains(modifier.id())) continue;
+			switch (modifier.operation()) {
+				case ADD_VALUE -> addValue += modifier.amount();
+				case ADD_MULTIPLIED_BASE -> multipliedBase += modifier.amount();
+				case ADD_MULTIPLIED_TOTAL -> multipliedTotal.add(modifier.amount());
+			}
+		}
+
+		ItemAttributeModifiers hoveredModifiers =
+				hoveredStack.get(DataComponents.ATTRIBUTE_MODIFIERS);
+		if (hoveredModifiers != null) {
+			for (ItemAttributeModifiers.Entry entry : hoveredModifiers.modifiers()) {
+				if (!entry.slot().test(EquipmentSlot.MAINHAND)) continue;
+				if (entry.attribute().value() != Attributes.ATTACK_DAMAGE.value()) continue;
+				AttributeModifier modifier = entry.modifier();
+				switch (modifier.operation()) {
+					case ADD_VALUE -> addValue += modifier.amount();
+					case ADD_MULTIPLIED_BASE -> multipliedBase += modifier.amount();
+					case ADD_MULTIPLIED_TOTAL -> multipliedTotal.add(modifier.amount());
+				}
+			}
+		}
+
+		double value = base + addValue;
+		value += value * multipliedBase;
+		for (double amount : multipliedTotal) {
+			value *= 1.0 + amount;
+		}
+		return (float) value;
+	}
+
+	/**
+	 * Чи впливає предмет на {@code ATTACK_DAMAGE} у слоті «основна рука».
+	 * Перевіряються ВСІ операції, а не лише ADD_VALUE: інакше зброя з
+	 * множним модифікатором вважалася б «не зброєю» й тултип не показувався.
+	 */
+	private static boolean hasMainhandAttackDamage(ItemStack stack) {
+		if (stack == null || stack.isEmpty()) return false;
+		ItemAttributeModifiers mods = stack.get(DataComponents.ATTRIBUTE_MODIFIERS);
+		if (mods == null) return false;
+		for (ItemAttributeModifiers.Entry entry : mods.modifiers()) {
+			if (!entry.slot().test(EquipmentSlot.MAINHAND)) continue;
+			if (entry.attribute().value() != Attributes.ATTACK_DAMAGE.value()) continue;
+			if (entry.modifier().amount() != 0.0) return true;
+		}
+		return false;
 	}
 
 	/** Внесок одного зачарування (з рівнем) у підсумкову шкоду — для розбивки в тултипі. */
@@ -194,8 +331,11 @@ public final class WeaponDamageTooltip {
 		ItemEnchantments enchantments = stack.get(DataComponents.ENCHANTMENTS);
 		if (enchantments == null || enchantments.isEmpty()) return baseDamage;
 
-		// Фіксований сід — детермінований результат у тултипі (щоб число не
-		// "мерехтіло" між наведеннями курсора для чарів з випадковою складовою).
+		// Власний генератор із ФІКСОВАНИМ сідом на кожен перерахунок:
+		// детермінований результат у тултипі (число не «мерехтить» між
+		// наведеннями для чарів з випадковою складовою). Раніше один
+		// статичний RandomSource поступово «просувався» між викликами, тож
+		// при кожній перебудові кешу результат міг відрізнятися.
 		RandomSource random = RandomSource.create(0L);
 		float total = baseDamage;
 
@@ -227,7 +367,27 @@ public final class WeaponDamageTooltip {
 				.orElse(true);
 	}
 
+	/**
+	 * ОПТИМІЗАЦІЯ: String.format("%.1f", ...) на кожен виклик створює
+	 * Formatter, заново парсить формат і боксить Float — а викликається цей
+	 * метод кілька разів на кадр. Ручне форматування без алокацій.
+	 */
 	private static String fmt(float v) {
-		return Math.abs(v - Math.round(v)) < 0.05f ? String.valueOf(Math.round(v)) : String.format("%.1f", v);
+		long rounded = Math.round(v);
+		if (Math.abs(v - rounded) < 0.05f) {
+			return Long.toString(rounded);
+		}
+		// Одна цифра після коми — робимо вручну, щоб не тягнути String.format.
+		//
+		// БАГ-ФІКС: попередня версія неправильно округлювала ВІД'ЄМНІ числа
+		// (наприклад -1.2 перетворювалось на "0.2"), що теоретично могло
+		// з'явитися при Слабкості/негативних модифікаторах. Тепер знак
+		// зберігається окремо, а модуль округлюється.
+		long tenths = Math.round(v * 10.0);
+		String sign = tenths < 0 ? "-" : "";
+		long abs = Math.abs(tenths);
+		long whole = abs / 10;
+		long frac = abs % 10;
+		return frac == 0 ? sign + whole : sign + whole + "." + frac;
 	}
 }

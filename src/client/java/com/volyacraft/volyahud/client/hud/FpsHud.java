@@ -16,7 +16,10 @@ public class FpsHud {
 	public static void render(GuiGraphics graphics, Minecraft mc) {
 		HudConfig cfg = HudConfig.INSTANCE;
 
-		java.util.List<Line> lines = new java.util.ArrayList<>();
+		// ОПТИМІЗАЦІЯ: список рядків панелі перевикористовується замість
+		// нового ArrayList на кожен кадр.
+		java.util.List<Line> lines = LINES;
+		lines.clear();
 
 		if (cfg.showFps) {
 			int fps = mc.getFps();
@@ -24,11 +27,24 @@ public class FpsHud {
 			lines.add(new Line(fps + " FPS", color));
 		}
 
+		if (cfg.showPing && mc.player != null && mc.getConnection() != null) {
+			net.minecraft.client.multiplayer.PlayerInfo info =
+					mc.getConnection().getPlayerInfo(mc.player.getUUID());
+			if (info != null) {
+				int ping = info.getLatency();
+				int color = ping < 80 ? 0x55FF55 : ping < 150 ? 0xFFFF55 : 0xFF5555;
+				lines.add(new Line("Ping: " + ping + " мс", color));
+			}
+		}
+
 		if (mc.player != null && (cfg.showCoordX || cfg.showCoordY || cfg.showCoordZ)) {
+			// ОПТИМІЗАЦІЯ: String.format("%.1f") створює Formatter і парсить
+			// формат щоразу — а це 3 рази на КОЖЕН кадр. Ручне форматування
+			// без алокацій.
 			StringBuilder sb = new StringBuilder();
-			if (cfg.showCoordX) sb.append(String.format("X: %.1f  ", mc.player.getX()));
-			if (cfg.showCoordY) sb.append(String.format("Y: %.1f  ", mc.player.getY()));
-			if (cfg.showCoordZ) sb.append(String.format("Z: %.1f", mc.player.getZ()));
+			if (cfg.showCoordX) sb.append("X: ").append(oneDecimal(mc.player.getX())).append("  ");
+			if (cfg.showCoordY) sb.append("Y: ").append(oneDecimal(mc.player.getY())).append("  ");
+			if (cfg.showCoordZ) sb.append("Z: ").append(oneDecimal(mc.player.getZ()));
 			lines.add(new Line(sb.toString().stripTrailing(), 0xFFFFFF));
 		}
 
@@ -72,7 +88,11 @@ public class FpsHud {
 		for (Line line : lines) {
 			panelW = Math.max(panelW, mc.font.width(line.text()));
 		}
-		panelW += 8;
+		// Фон можна вимкнути: тоді лишаються тільки цифри/літери, без
+		// темної плашки й рамки. Відступи теж прибираємо, щоб текст не
+		// висів у порожнечі.
+		boolean background = cfg.infoPanelBackground;
+		if (background) panelW += 13;
 
 		int y = bottom ? (screenH - 6 - totalH) : 4;
 		int x = right ? (screenW - panelW - 4) : 4;
@@ -81,15 +101,40 @@ public class FpsHud {
 		x = HudStyle.clampX(x + cfg.infoPanelOffsetX, panelW, screenW);
 		y = HudStyle.clampY(y + cfg.infoPanelOffsetY, totalH, screenH);
 
-		HudStyle.panel(graphics, x - 2, y - 3, x + panelW - 2, y + totalH + 1);
-
-		for (Line line : lines) {
-			y = drawLine(graphics, mc, line.text(), line.color(), x, y, right, panelW);
+		if (background) {
+			int panelX1 = x - 2;
+			int panelY1 = y - 3;
+			int panelX2 = x + panelW - 2;
+			HudStyle.panelAccent(graphics, panelX1, panelY1, panelX2, y + totalH + 1, HudStyle.ACCENT_CYAN);
 		}
+
+		// Рядки навмисно не чергуються світлими смугами: на темній панелі
+		// напівпрозора "зебра" виглядала як випадкова біла лінія поверх
+		// координат. Панель має бути одним цільним блоком, а рядки — просто
+		// йти один під одним.
+		int rowY = y;
+		for (Line line : lines) {
+			rowY = drawLine(graphics, mc, line.text(), line.color(), x, rowY, right, panelW, background);
+		}
+	}
+
+	/** Форматує число з одним знаком після коми без String.format. */
+	private static String oneDecimal(double v) {
+		long tenths = Math.round(v * 10.0);
+		// Знак виносимо окремо: інакше для -1.2 (tenths = -12) ціла частина
+		// дорівнювала -1, а "нормалізація" дробу давала 0.2 — координата
+		// раптово ставала додатною. Окремий знак також зберігає мінус для
+		// маленьких значень на кшталт -0.1.
+		boolean negative = tenths < 0;
+		long abs = Math.abs(tenths);
+		return (negative ? "-" : "") + (abs / 10) + "." + (abs % 10);
 	}
 
 	private record Line(String text, int color) {
 	}
+
+	/** ОПТИМІЗАЦІЯ: перевикористовуваний список рядків інфо-панелі. */
+	private static final java.util.List<Line> LINES = new java.util.ArrayList<>(8);
 
 	// Порядок відповідає тому, як зростає ванільний yaw (0=Пд, 90=Зх, 180=Пн, 270/-90=Сх).
 	private static final String[] DIRECTIONS = {
@@ -106,9 +151,12 @@ public class FpsHud {
 		return DIRECTIONS[index] + "  " + degrees + "\u00B0";
 	}
 
-	private static int drawLine(GuiGraphics graphics, Minecraft mc, String text, int color, int panelX, int y, boolean right, int panelW) {
+	private static int drawLine(GuiGraphics graphics, Minecraft mc, String text, int color, int panelX, int y,
+			boolean right, int panelW, boolean background) {
 		int textWidth = mc.font.width(text);
-		int textX = right ? (panelX + panelW - textWidth - 4) : (panelX + 2);
+		int textX = right
+				? (panelX + panelW - textWidth - (background ? 6 : 0))
+				: (panelX + (background ? 5 : 0));
 		graphics.drawString(mc.font, text, textX, y, color, true);
 		return y + 11;
 	}

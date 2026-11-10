@@ -59,12 +59,35 @@ public class PearlTrajectory {
 
 	// траєкторія у польоті кожного живого снаряда: id сутності -> її шлях
 	private static final Map<Integer, Trail> TRAILS = new HashMap<>();
+	private static String currentDimension = null;
+
+	/** Скидає сліди й кеш прев'ю при зміні світу/виміру. */
+	public static void reset() {
+		TRAILS.clear();
+		cachedPreviewKind = null;
+		cachedPreviewPoints = List.of();
+		currentDimension = null;
+	}
 
 	private static final float PREVIEW_WIDTH = 3.0f;
 	private static final float TRAIL_WIDTH = 2.5f;
 
 	public static void tick(Minecraft mc) {
-		if (mc.level == null) return;
+		if (mc.level == null) {
+			reset();
+			return;
+		}
+
+		// Entity id is only unique inside one level; switching dimension
+		// could otherwise append the new projectile position to an old trail.
+		String dimension = mc.level.dimension().location().toString();
+		if (!dimension.equals(currentDimension)) {
+			TRAILS.clear();
+			cachedPreviewKind = null;
+			cachedPreviewPoints = List.of();
+			currentDimension = dimension;
+		}
+
 		if (!HudConfig.INSTANCE.pearlTrail) {
 			TRAILS.clear();
 			return;
@@ -81,8 +104,11 @@ public class PearlTrajectory {
 			if (points.isEmpty() || points.get(points.size() - 1).distanceToSqr(e.position()) > 0.0004) {
 				points.add(e.position());
 			}
-			while (points.size() > 200) {
-				points.remove(0);
+			// ОПТИМІЗАЦІЯ: ArrayList.remove(0) — це O(n) зсув усіх
+			// посилань (System.arraycopy) на кожне видалення. Натомість
+			// просто підрізаємо початок списку один раз.
+			if (points.size() > 200) {
+				points.subList(0, points.size() - 200).clear();
 			}
 		}
 	}
@@ -113,7 +139,7 @@ public class PearlTrajectory {
 			Kind held = heldKind(mc);
 			if (held != null) {
 				List<Vec3> path = getOrSimulate(mc, held, partialTick);
-				drawThickLine(pose, relativeTo(path, camPos), held.pr, held.pg, held.pb, 0.9f, PREVIEW_WIDTH);
+				drawThickLine(pose, relativeTo(path, camPos), path.size(), held.pr, held.pg, held.pb, 0.9f, PREVIEW_WIDTH);
 			} else {
 				cachedPreviewKind = null; // предмет прибрали з руки — старий кеш більше не актуальний
 			}
@@ -122,18 +148,39 @@ public class PearlTrajectory {
 		// 2. Слід за вже кинутими снарядами
 		if (cfg.pearlTrail) {
 			for (Trail trail : TRAILS.values()) {
-				drawThickLine(pose, relativeTo(trail.points(), camPos), trail.kind().tr, trail.kind().tg, trail.kind().tb, 0.95f, TRAIL_WIDTH);
+				List<Vec3> points = trail.points();
+				drawThickLine(pose, relativeTo(points, camPos), points.size(), trail.kind().tr, trail.kind().tg, trail.kind().tb, 0.95f, TRAIL_WIDTH);
 			}
 		}
 	}
 
-	/** Переводить список абсолютних світових точок у координати відносно камери (double, ще до касту в float). */
-	private static List<Vec3> relativeTo(List<Vec3> points, Vec3 camPos) {
-		List<Vec3> result = new ArrayList<>(points.size());
-		for (Vec3 p : points) {
-			result.add(p.subtract(camPos));
+	/**
+	 * Переводить список абсолютних світових точок у координати відносно
+	 * камери (double, ще до касту в float).
+	 *
+	 * <p>ОПТИМІЗАЦІЯ: раніше цей метод створював новий ArrayList I новий
+	 * Vec3 для КОЖНОЇ точки — тобто на кадр для прев'ю це ~141 об'єкт, а
+	 * для кожного активного сліду ще до 200. Тепер точки переносяться
+	 * простою double-арею, яка перевикористовується між кадрами, і жодних
+	 * алокацій у гарячому 3D-проході немає.
+	 */
+	private static double[] relativeBuffer = new double[512];
+
+	private static double[] relativeTo(List<Vec3> points, Vec3 camPos) {
+		int n = points.size();
+		if (relativeBuffer.length < n * 3) {
+			relativeBuffer = new double[Math.max(n * 3, relativeBuffer.length * 2)];
 		}
-		return result;
+		double camX = camPos.x;
+		double camY = camPos.y;
+		double camZ = camPos.z;
+		for (int i = 0; i < n; i++) {
+			Vec3 p = points.get(i);
+			relativeBuffer[i * 3] = p.x - camX;
+			relativeBuffer[i * 3 + 1] = p.y - camY;
+			relativeBuffer[i * 3 + 2] = p.z - camZ;
+		}
+		return relativeBuffer;
 	}
 
 	private static Kind heldKind(Minecraft mc) {
@@ -273,10 +320,14 @@ public class PearlTrajectory {
 	private static Vec3 shootDirection(Player player, float partialTick, float pitchOffset) {
 		float pitch = player.getViewXRot(partialTick);
 		float yaw = player.getViewYRot(partialTick);
-		double pitchRad = Math.toRadians(pitch);
+		// Снаряд кидається з тим самим xRot, до якого додається pitchOffset
+		// (наприклад, -20° для зілля). Горизонтальна складова теж має
+		// рахуватися від ЕФЕКТИВНОГО кута, інакше прев'ю летить надто
+		// стрімко/полого порівняно з реальним кидком.
+		double pitchRad = Math.toRadians(pitch + pitchOffset);
 		double yawRad = Math.toRadians(yaw);
 		double x = -Math.sin(yawRad) * Math.cos(pitchRad);
-		double y = -Math.sin(Math.toRadians(pitch + pitchOffset));
+		double y = -Math.sin(pitchRad);
 		double z = Math.cos(yawRad) * Math.cos(pitchRad);
 		return new Vec3(x, y, z).normalize();
 	}
@@ -288,22 +339,54 @@ public class PearlTrajectory {
 	 * Тут ширина керується напряму перед відправкою буфера на відмальовку
 	 * (той самий прийом, яким ваніла малює товсті контури хітбоксів).
 	 */
-	private static void drawThickLine(Matrix4f pose, List<Vec3> points, float r, float g, float b, float a, float width) {
-		if (points.size() < 2) return;
+	private static void drawThickLine(Matrix4f pose, double[] points, int count, float r, float g, float b, float a, float width) {
+		if (count < 2) return;
+
+		// If every point is identical (for example, a trail that has not
+		// moved yet), there are no vertices to add. Starting a Tesselator
+		// batch and then building an empty buffer can leave the shared
+		// builder in a bad state, so bail out before touching it.
+		boolean anySegment = false;
+		for (int i = 0; i < count - 1; i++) {
+			int o1 = i * 3;
+			int o2 = o1 + 3;
+			double dx = points[o2] - points[o1];
+			double dy = points[o2 + 1] - points[o1 + 1];
+			double dz = points[o2 + 2] - points[o1 + 2];
+			if (dx * dx + dy * dy + dz * dz >= 1.0E-12) {
+				anySegment = true;
+				break;
+			}
+		}
+		if (!anySegment) return;
 
 		Tesselator tesselator = Tesselator.getInstance();
 		BufferBuilder buffer = tesselator.begin(VertexFormat.Mode.LINES, DefaultVertexFormat.POSITION_COLOR_NORMAL);
 
-		for (int i = 0; i < points.size() - 1; i++) {
-			Vec3 a1 = points.get(i);
-			Vec3 a2 = points.get(i + 1);
-			Vec3 normal = a2.subtract(a1).normalize();
-			buffer.addVertex(pose, (float) a1.x, (float) a1.y, (float) a1.z)
+		// ОПТИМІЗАЦІЯ: раніше нормаль рахувалася через
+		// a2.subtract(a1).normalize() — тобто на кожен відрізок створювалися
+		// ДОДАТКОВО два Vec3 (різниця та нормаль). Для прев'ю з ~140
+		// точок це ~280 алокацій НА КАДР. Тепер нормаль рахується прямо з
+		// double-значень у буфері, без жодного об'єкта.
+		for (int i = 0; i < count - 1; i++) {
+			int o1 = i * 3;
+			int o2 = o1 + 3;
+
+			double dx = points[o2] - points[o1];
+			double dy = points[o2 + 1] - points[o1 + 1];
+			double dz = points[o2 + 2] - points[o1 + 2];
+			double len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+			if (len < 1.0E-6) continue;
+			float nx = (float) (dx / len);
+			float ny = (float) (dy / len);
+			float nz = (float) (dz / len);
+
+			buffer.addVertex(pose, (float) points[o1], (float) points[o1 + 1], (float) points[o1 + 2])
 					.setColor(r, g, b, a)
-					.setNormal((float) normal.x, (float) normal.y, (float) normal.z);
-			buffer.addVertex(pose, (float) a2.x, (float) a2.y, (float) a2.z)
+					.setNormal(nx, ny, nz);
+			buffer.addVertex(pose, (float) points[o2], (float) points[o2 + 1], (float) points[o2 + 2])
 					.setColor(r, g, b, a)
-					.setNormal((float) normal.x, (float) normal.y, (float) normal.z);
+					.setNormal(nx, ny, nz);
 		}
 
 		RenderSystem.setShader(CoreShaders.RENDERTYPE_LINES);

@@ -165,8 +165,8 @@ public class ChunkGridOverlay {
 		if (LABELS.isEmpty()) return;
 		for (Label label : LABELS) {
 			int w = mc.font.width(label.text());
-			graphics.fill(label.x() - w / 2 - 3, label.y() - 6, label.x() + w / 2 + 3, label.y() + 6, 0x70000000);
-			graphics.drawCenteredString(mc.font, label.text(), label.x(), label.y() - 4, 0x55D5FF);
+			graphics.fill(label.x() - w / 2 - 3, label.y() - 6, label.x() + w / 2 + 3, label.y() + 6, 0x70262A31);
+			graphics.drawCenteredString(mc.font, label.text(), label.x(), label.y() - 4, HudStyle.TEXT_MUTED);
 		}
 	}
 

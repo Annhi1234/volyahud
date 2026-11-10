@@ -6,5 +6,8 @@
   "key.volyahud.open_map": "Відкрити повну карту VolyaHUD",
   "key.volyahud.toggle_hud": "Приховати/показати весь VolyaHUD",
   "key.volyahud.quick_waypoint": "Швидко поставити мітку на карту",
+  "key.volyahud.copy_coords": "Скопіювати поточні координати",
+  "key.volyahud.auto_deposit": "Авто-закид у скриню (Alt+F6)",
+  "key.volyahud.auto_collect": "Авто-збір зі скрині (Alt+F7)",
   "category.volyahud.general": "VolyaHUD"
 }

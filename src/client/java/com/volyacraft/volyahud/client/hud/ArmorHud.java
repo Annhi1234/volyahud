@@ -31,6 +31,11 @@ public class ArmorHud {
 			EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET
 	};
 
+	/**
+	 * Розмір слота — 20x20, як один квадратик ванільного хотбара.
+	 * Слоти малюються вручну (темно-сіра комірка з рамкою й фаскою),
+	 * тому розмір не прив'язаний до текстури container/slot.
+	 */
 	private static final int SLOT = 20;
 	private static final int GAP = 2;
 
@@ -75,7 +80,8 @@ public class ArmorHud {
 		x = clamp(x, -panelW + 8, screenW - 8);
 		y = clamp(y, 0, screenH - 8);
 
-		HudStyle.panel(graphics, x - 3, y - 3, x + panelW + 3, y + panelH + 3);
+		HudStyle.panelAccent(graphics, x - 3, y - 3, x + panelW + 3, y + panelH + 3,
+				HudStyle.ACCENT_CYAN);
 
 		if (line) {
 			for (int i = 0; i < ROW.length; i++) {
@@ -154,9 +160,12 @@ public class ArmorHud {
 		// що він малюється поверх.
 		graphics.pose().translate(tx, ty, 200.0f);
 		graphics.pose().scale(fontScale, fontScale, 1f);
-		// Підкладка — майже чорна й майже непрозора, щоб цифра читалася на
-		// будь-якій іконці (навіть на світлому шоломі чи броні).
-		graphics.fill(-1, -1, scaledW + 1, 9, 0xD0000000);
+		// Підкладка — темно-сіра й майже непрозора, щоб цифра читалася на
+		// будь-якій іконці (навіть на світлому шоломі чи броні). Ширину
+		// беремо в ЛОКАЛЬНИХ координатах (textW), бо pose вже масштабований:
+		// scaledW — це вже екранні пікселі, і після scale() підкладка вийшла б
+		// вужчою за текст.
+		graphics.fill(-1, -1, textW + 1, 9, 0xE0202226);
 		graphics.drawString(font, text, 0, 0, color, true);
 		graphics.pose().popPose();
 	}
@@ -180,6 +189,12 @@ public class ArmorHud {
 	 */
 	private static final java.util.Map<Integer, float[]> SMOOTHED_SCREEN_POS = new java.util.HashMap<>();
 	private static final float SMOOTHING = 0.45f; // менше = плавніше, але з більшою затримкою
+
+	/** Скидає згладжені екранні позиції (новий світ, вихід, вимкнення HUD). */
+	public static void reset() {
+		SMOOTHED_SCREEN_POS.clear();
+		SEEN_THIS_FRAME.clear();
+	}
 
 	// ОПТИМІЗАЦІЯ: раніше цей Set (потрібен лише для того, щоб в кінці кадру
 	// прибрати з SMOOTHED_SCREEN_POS записи гравців, яких у кадрі не було
@@ -279,11 +294,10 @@ public class ArmorHud {
 		SMOOTHED_SCREEN_POS.keySet().retainAll(seenThisFrame);
 	}
 
-	// Розмір комірки екіпіровки над головою іншого гравця. Навмисно менший за
-	// власну панель (SLOT=20), щоб увесь блок лишався компактним і не
-	// заступав огляд у PvP; 18px — це той самий розмір, що й у ванільному
-	// інвентарі (16px іконка + по 1px рамки з кожного боку).
-	private static final int OTHER_SLOT = 18;
+	// Розмір комірки екіпіровки над головою іншого гравця — той самий
+	// 20x20, що й у власній панелі та в хотбарі (16px іконка + рамка й
+	// фаска). Комірки стоять упритул, як слоти хотбара.
+	private static final int OTHER_SLOT = 20;
 	private static final int OTHER_ROW_W = ROW.length * OTHER_SLOT;
 	// Висота рядка HP (текст + внутрішні відступи фону).
 	private static final int HP_ROW_H = 10;
@@ -293,6 +307,22 @@ public class ArmorHud {
 	// відстані впасти менше за це значення — тому рядки НЕ можуть накластися
 	// одне на одного, хай там які значення хтось виставить у меню.
 	private static final int MIN_ROW_GAP = 1;
+	/** Відступ блоку вбік, коли він намальований зліва/справа від голови. */
+	private static final int SIDE_OFFSET = 38;
+	/** Мінімальний масштаб, нижче якого блок уже нечитабельний. */
+	private static final float MIN_OVERLAY_SCALE = 0.45f;
+
+	/**
+	 * Масштаб блоку іншого гравця: близько — базовий (компактний) розмір,
+	 * далі — плавно менше. Це прибирає ефект «величезної панелі», яка
+	 * однаково висіла над головою і з 2, і з 20 блоків.
+	 */
+	private static float overlayScale(HudConfig cfg, double distance) {
+		float base = cfg.otherArmorScale;
+		if (!cfg.otherArmorDistanceScale) return base;
+		double t = Math.max(0.0, Math.min(1.0, (distance - 3.0) / 12.0));
+		return Math.max(MIN_OVERLAY_SCALE, base * (float) (1.0 - 0.35 * t));
+	}
 
 	/**
 	 * Малює накопичені за цей кадр мітки гравців (заповнюється в renderOthers,
@@ -319,6 +349,11 @@ public class ArmorHud {
 	 * хай яке значення виставить користувач — рядки фізично не можуть
 	 * накластися одне на одного.
 	 */
+	private static boolean isCrosshairTarget(Minecraft mc, Player player) {
+		return mc.hitResult instanceof net.minecraft.world.phys.EntityHitResult hit
+				&& hit.getEntity() == player;
+	}
+
 	public static void drawQueuedOverlays(GuiGraphics graphics, Minecraft mc) {
 		HudConfig cfg = HudConfig.INSTANCE;
 		Font font = mc.font;
@@ -327,9 +362,32 @@ public class ArmorHud {
 		for (OverlayQueue.Entry entry : OverlayQueue.drain()) {
 			if (entry.player().isRemoved() || !entry.player().isAlive()) continue;
 
-			int centerX = entry.x();
-			// entry.y() відповідає приблизно висоті, де ваніла малює нік гравця.
-			int nickY = entry.y();
+			// entry.x()/entry.y() — точка над головою гравця, яку порахував
+			// 3D-прохід. Ручні зсуви застосовуються до всього блоку одразу.
+			int baseX = entry.x() + cfg.otherOverlayOffsetX;
+			int baseY = entry.y() + cfg.otherOverlayOffsetY;
+			int centerX = baseX;
+			int nickY = baseY;
+			if (cfg.otherOverlayAnchor == HudConfig.OverlayAnchor.LEFT) {
+				centerX = baseX - SIDE_OFFSET;
+				nickY = baseY - 8;
+			} else if (cfg.otherOverlayAnchor == HudConfig.OverlayAnchor.RIGHT) {
+				centerX = baseX + SIDE_OFFSET;
+				nickY = baseY - 8;
+			}
+
+			// Не даємо блоку вилізти за край екрана, якщо гравець стоїть
+			// близько до нього, а вибрано позицію зліва/справа.
+			int halfBlock = OTHER_ROW_W / 2 + 6;
+			centerX = Math.max(halfBlock, Math.min(graphics.guiWidth() - halfBlock, centerX));
+
+			float scale = overlayScale(cfg, entry.distance());
+			float pivotX = baseX;
+			float pivotY = baseY - 6;
+			graphics.pose().pushPose();
+			graphics.pose().translate(pivotX, pivotY, 0);
+			graphics.pose().scale(scale, scale, 1f);
+			graphics.pose().translate(-pivotX, -pivotY, 0);
 
 			int hpY = nickY - gap - HP_ROW_H + cfg.otherHpOffsetY;
 
@@ -341,7 +399,10 @@ public class ArmorHud {
 					hpY - gap - OTHER_SLOT + cfg.otherEquipmentOffsetY,
 					hpY - MIN_ROW_GAP - OTHER_SLOT
 			);
-			int peekY = Math.min(armorY - gap - OTHER_SLOT, armorY - MIN_ROW_GAP - OTHER_SLOT);
+			boolean showArmor = cfg.otherPlayersArmorHud
+					&& entry.distance() <= cfg.otherArmorRenderDistance;
+			int peekBaseY = showArmor ? armorY : hpY;
+			int peekY = Math.min(peekBaseY - gap - OTHER_SLOT, peekBaseY - MIN_ROW_GAP - OTHER_SLOT);
 
 			if (cfg.healthTags) {
 				float hp = Math.max(0f, entry.player().getHealth());
@@ -354,20 +415,22 @@ public class ArmorHud {
 					hpText += "  " + Math.round(entry.distance()) + "m";
 				}
 				int hpW = font.width(hpText);
-				HudStyle.panel(graphics, centerX - hpW / 2 - 2, hpY - 1, centerX + hpW / 2 + 2, hpY + 9);
+				HudStyle.panelAccent(graphics, centerX - hpW / 2 - 2, hpY - 1, centerX + hpW / 2 + 2, hpY + 9,
+						hpColor);
 				graphics.drawString(font, hpText, centerX - hpW / 2, hpY, hpColor, true);
 			}
 
-			// Ряд екіпіровки: компактний "інвентарний" рядок з 4 слотів у
-			// стилі ваніли (HudStyle.mcSlot — сіра утоплена комірка з рамкою
-			// й фаскою, як у справжньому GUI), у фіксованому порядку зліва
-			// направо: шолом -> нагрудник -> штани -> чоботи (ROW). Слоти
+			// Ряд екіпіровки: 4 квадратики в стилі хотбара (HudStyle.mcSlot
+			// малює темно-сіру утоплену комірку з рамкою й фаскою), у
+			// фіксованому порядку зліва направо:
+			// шолом -> нагрудник -> штани -> чоботи (ROW). Слоти
 			// домальовуються навіть якщо предмет відсутній (порожня комірка),
 			// тому позиція кожного типу броні завжди однакова і не "стрибає"
 			// залежно від того, що зараз надіте на противника.
-			if (cfg.otherPlayersArmorHud) {
+			if (showArmor) {
 				int ix = centerX - OTHER_ROW_W / 2;
-				HudStyle.panel(graphics, ix - 2, armorY - 2, ix + OTHER_ROW_W + 2, armorY + OTHER_SLOT + 2);
+				HudStyle.panelAccent(graphics, ix - 2, armorY - 2, ix + OTHER_ROW_W + 2, armorY + OTHER_SLOT + 2,
+						HudStyle.ACCENT_CYAN);
 				for (EquipmentSlot slot : ROW) {
 					ItemStack stack = entry.player().getItemBySlot(slot);
 					HudStyle.mcSlot(graphics, ix, armorY, OTHER_SLOT);
@@ -385,11 +448,15 @@ public class ArmorHud {
 				}
 			}
 
-			// Ряд зброї в руках: до 2 слотів (основна + другорядна рука) тим
-			// самим ванільним стилем, що й екіпіровка. Ряд завжди над
+			// Ряд зброї в руках: до 2 слотів (основна + другорядна рука) у
+			// тому самому стилі хотбара, що й екіпіровка. Ряд завжди над
 			// екіпіровкою (peekY < armorY), тому навіть при увімкнених обох
 			// опціях блоки ніколи не перекриваються.
-			if (cfg.inventoryPeek) {
+			//
+			// Показуємо це лише для гравця ПІД ПРИЦІЛОМ: опція називається
+			// "Показ екіпіровки цілі", а раніше предмети в руках малювались
+			// над кожним гравцем у радіусі — це захаращувало екран у бою.
+			if (cfg.inventoryPeek && isCrosshairTarget(mc, entry.player())) {
 				ItemStack mainHand = entry.player().getMainHandItem();
 				ItemStack offHand = entry.player().getOffhandItem();
 				boolean hasMain = !mainHand.isEmpty();
@@ -399,7 +466,8 @@ public class ArmorHud {
 					int cells = (hasMain ? 1 : 0) + (hasOff ? 1 : 0);
 					int totalW = cells * OTHER_SLOT + (cells - 1) * cellGap;
 					int px = centerX - totalW / 2;
-					HudStyle.panel(graphics, px - 2, peekY - 2, px + totalW + 2, peekY + OTHER_SLOT + 2);
+					HudStyle.panelAccent(graphics, px - 2, peekY - 2, px + totalW + 2, peekY + OTHER_SLOT + 2,
+							HudStyle.ACCENT_GOLD);
 					if (hasMain) {
 						HudStyle.mcSlot(graphics, px, peekY, OTHER_SLOT);
 						int iconX = px + (OTHER_SLOT - 16) / 2;
@@ -421,6 +489,7 @@ public class ArmorHud {
 					}
 				}
 			}
+			graphics.pose().popPose();
 		}
 	}
 }

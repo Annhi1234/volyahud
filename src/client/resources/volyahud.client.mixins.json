@@ -5,7 +5,8 @@
 	"client": [
 		"ClientPacketListenerMixin",
 		"MultiPlayerGameModeMixin",
-		"LightEngineMixin"
+		"LightEngineMixin",
+		"ContainerScreenBulkTransferMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

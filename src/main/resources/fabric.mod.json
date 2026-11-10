@@ -3,7 +3,7 @@
 	"id": "volyahud",
 	"version": "${version}",
 	"name": "VolyaHUD",
-	"description": "Кастомний PvP HUD для VolyaCraft: броня, траєкторія перл, PvP-радар, бафи цілі та меню налаштувань.",
+	"description": "Кастомний PvP HUD для VolyaCraft: броня, траєкторія перл, PvP-радар, бафи цілі, карта з мітками/смертю/територією, ping, клавіші/CPS і меню налаштувань.",
 	"authors": [
 		"Kiril"
 	],
@@ -16,8 +16,7 @@
 		"client": [
 			{
 				"adapter": "default",
-				"value": "com.volyacraft.volyahud.client.VolyaHudClient",
-				"environment": "client"
+				"value": "com.volyacraft.volyahud.client.VolyaHudClient"
 			}
 		]
 	},
@@ -29,7 +28,7 @@
 	],
 	"depends": {
 		"fabricloader": ">=0.19.3",
-		"minecraft": ">=1.21.1 <=1.21.11",
+		"minecraft": "1.21.4",
 		"java": ">=21",
 		"fabric-api": "*"
 	}
